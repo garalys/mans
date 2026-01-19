@@ -66,7 +66,7 @@ def create_op2_monthly_bridge(
         .groupby(["report_year", "report_month", "orig_country"], as_index=False)
         .agg(
             actual_cost=("total_cost_usd", "sum"),
-            actual_distance=("distance_for_cpkm", "sum"),
+            actual_distance_km=("distance_for_cpkm", "sum"),
             actual_loads=("executed_loads", "sum"),
         )
     )
@@ -85,7 +85,7 @@ def create_op2_monthly_bridge(
         axis=1,
     )
 
-    actual["compare_cpkm"] = actual["actual_cost"] / actual["actual_distance"]
+    actual["compare_cpkm"] = actual["actual_cost"] / actual["actual_distance_km"]
 
     # Get OP2 metrics
     op2_base = extract_op2_monthly_base_cpkm(df_op2)
@@ -112,7 +112,7 @@ def create_op2_monthly_bridge(
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
     bridge["loads_variance_pct"] = (bridge["loads_variance"] / bridge["op2_base_loads"]) * 100
 
-    bridge["distance_variance_km"] = bridge["actual_distance"] - bridge["op2_base_distance"]
+    bridge["distance_variance_km"] = bridge["actual_distance_km"] - bridge["op2_base_distance"]
     bridge["distance_variance_pct"] = (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100
 
     bridge["cpkm_variance"] = bridge["compare_cpkm"] - bridge["op2_base_cpkm"]
@@ -126,7 +126,7 @@ def create_op2_monthly_bridge(
     bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     bridge["bridging_value"] = bridge["report_year"] + "_" + bridge["report_month"] + "_OP2"
-    bridge["m2_distance_km"] = bridge["actual_distance"]
+    bridge["m2_distance_km"] = bridge["actual_distance_km"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
     bridge["benchmark_gap"] = bridge["compare_cpkm"] - bridge["op2_cpkm"]
 

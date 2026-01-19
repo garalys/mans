@@ -84,7 +84,7 @@ def create_op2_weekly_bridge(
         .groupby(["report_year", "report_week", "orig_country"], as_index=False)
         .agg(
             actual_cost=("total_cost_usd", "sum"),
-            actual_distance=("distance_for_cpkm", "sum"),
+            actual_distance_km=("distance_for_cpkm", "sum"),
             actual_loads=("executed_loads", "sum"),
         )
     )
@@ -103,7 +103,7 @@ def create_op2_weekly_bridge(
         axis=1,
     )
 
-    actual["compare_cpkm"] = actual["actual_cost"] / actual["actual_distance"]
+    actual["compare_cpkm"] = actual["actual_cost"] / actual["actual_distance_km"]
 
     # Get OP2 metrics
     op2_base = extract_op2_weekly_base_cpkm(df_op2)
@@ -111,28 +111,14 @@ def create_op2_weekly_bridge(
     tech_impact = calculate_op2_tech_impact(df, df_op2, by_business=False)
     market_impact_op2 = calculate_op2_market_rate_impact(df, df_op2, final_bridge_df, by_business=False)
 
-    logger.info(f"op2_norm shape: {op2_norm.shape}")
-    logger.info(f"op2_norm columns: {op2_norm.columns.tolist()}")
-
-    # Log columns for debugging
-    logger.info(f"actual columns: {actual.columns.tolist()}")
-    logger.info(f"actual shape: {actual.shape}")
-    logger.info(f"op2_base columns: {op2_base.columns.tolist()}")
-    logger.info(f"tech_impact columns: {tech_impact.columns.tolist()}")
-    logger.info(f"market_impact_op2 columns: {market_impact_op2.columns.tolist()}")
-
-    # Merge all components step by step for debugging
-    bridge = actual.merge(op2_base, on=["report_year", "report_week", "orig_country"], how="left")
-    logger.info(f"After op2_base merge - columns: {bridge.columns.tolist()}")
-
-    bridge = bridge.merge(op2_norm, on=["report_year", "report_week", "orig_country"], how="left")
-    logger.info(f"After op2_norm merge - columns: {bridge.columns.tolist()}")
-
-    bridge = bridge.merge(tech_impact, on=["report_year", "report_week", "orig_country"], how="left")
-    logger.info(f"After tech_impact merge - columns: {bridge.columns.tolist()}")
-
-    bridge = bridge.merge(market_impact_op2, on=["report_year", "report_week", "orig_country"], how="left")
-    logger.info(f"After market_impact merge - columns: {bridge.columns.tolist()}")
+    # Merge all components
+    bridge = (
+        actual
+        .merge(op2_base, on=["report_year", "report_week", "orig_country"], how="left")
+        .merge(op2_norm, on=["report_year", "report_week", "orig_country"], how="left")
+        .merge(tech_impact, on=["report_year", "report_week", "orig_country"], how="left")
+        .merge(market_impact_op2, on=["report_year", "report_week", "orig_country"], how="left")
+    )
 
     # Fill bridge schema
     bridge["bridge_type"] = "op2_weekly"
@@ -140,41 +126,26 @@ def create_op2_weekly_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
-    # Get SET impact from YoY bridge - only select required columns to avoid conflicts
+    # Get SET impact from YoY bridge
     yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
-    # Explicitly filter to only required columns to prevent column conflicts
-    set_impact_cols = ["report_year", "report_week", "orig_country", "business", "set_impact"]
-    yoy_set_impact = yoy_set_impact[[c for c in set_impact_cols if c in yoy_set_impact.columns]].copy()
-    logger.info(f"yoy_set_impact columns: {yoy_set_impact.columns.tolist()}")
-    logger.info(f"yoy_set_impact shape: {yoy_set_impact.shape}")
+    yoy_set_impact = yoy_set_impact[["report_year", "report_week", "orig_country", "business", "set_impact"]].copy()
 
     # Ensure dtypes match for merge
     for col in ["report_year", "report_week", "orig_country", "business"]:
         bridge[col] = bridge[col].astype(str)
-        if col in yoy_set_impact.columns:
-            yoy_set_impact[col] = yoy_set_impact[col].astype(str)
+        yoy_set_impact[col] = yoy_set_impact[col].astype(str)
 
     bridge = bridge.merge(
         yoy_set_impact,
         on=["report_year", "report_week", "orig_country", "business"],
         how="left",
     )
-    logger.info(f"After yoy_set_impact merge - columns: {bridge.columns.tolist()}")
-    logger.info(f"After yoy_set_impact merge - shape: {bridge.shape}")
-
-    # Sanity check - ensure required columns exist
-    required_cols = ["actual_distance", "actual_cost", "actual_loads", "op2_base_distance", "op2_base_cost", "op2_base_loads"]
-    missing_cols = [col for col in required_cols if col not in bridge.columns]
-    if missing_cols:
-        logger.error(f"Missing required columns after merges: {missing_cols}")
-        logger.error(f"Available columns: {bridge.columns.tolist()}")
-        raise KeyError(f"Missing required columns: {missing_cols}")
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
     bridge["loads_variance_pct"] = (bridge["loads_variance"] / bridge["op2_base_loads"]) * 100
 
-    bridge["distance_variance_km"] = bridge["actual_distance"] - bridge["op2_base_distance"]
+    bridge["distance_variance_km"] = bridge["actual_distance_km"] - bridge["op2_base_distance"]
     bridge["distance_variance_pct"] = (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100
 
     bridge["cost_variance_mm"] = (bridge["actual_cost"] - bridge["op2_base_cost"]) / 1_000_000
@@ -185,19 +156,19 @@ def create_op2_weekly_bridge(
     bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     bridge["tech_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_tech_impact_value"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_tech_impact_value"] / bridge["actual_distance_km"],
         0,
     )
 
     bridge["market_rate_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_market_impact"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_market_impact"] / bridge["actual_distance_km"],
         0,
     )
 
     bridge["bridging_value"] = bridge["report_year"] + "_" + bridge["report_week"] + "_OP2"
-    bridge["w2_distance_km"] = bridge["actual_distance"]
+    bridge["w2_distance_km"] = bridge["actual_distance_km"]
     bridge["benchmark_gap"] = bridge["compare_cpkm"] - bridge["op2_base_cpkm"]
 
     # Calculate carrier and demand impacts
@@ -251,7 +222,7 @@ def create_op2_weekly_country_business_bridge(
         .groupby(["report_year", "report_week", "orig_country", "business"], as_index=False)
         .agg(
             actual_cost=("total_cost_usd", "sum"),
-            actual_distance=("distance_for_cpkm", "sum"),
+            actual_distance_km=("distance_for_cpkm", "sum"),
             actual_loads=("executed_loads", "sum"),
         )
     )
@@ -269,7 +240,7 @@ def create_op2_weekly_country_business_bridge(
         axis=1,
     )
 
-    actual["compare_cpkm"] = actual["actual_cost"] / actual["actual_distance"]
+    actual["compare_cpkm"] = actual["actual_cost"] / actual["actual_distance_km"]
 
     # Get OP2 metrics at business level
     op2_base = extract_op2_weekly_base_by_business(df_op2)
@@ -320,7 +291,7 @@ def create_op2_weekly_country_business_bridge(
         0,
     )
 
-    bridge["distance_variance_km"] = bridge["actual_distance"] - bridge["op2_base_distance"]
+    bridge["distance_variance_km"] = bridge["actual_distance_km"] - bridge["op2_base_distance"]
     bridge["distance_variance_pct"] = np.where(
         bridge["op2_base_distance"] > 0,
         (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100,
@@ -338,14 +309,14 @@ def create_op2_weekly_country_business_bridge(
     bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     bridge["tech_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_tech_impact_value"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_tech_impact_value"] / bridge["actual_distance_km"],
         0,
     )
 
     bridge["market_rate_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_market_impact"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_market_impact"] / bridge["actual_distance_km"],
         0,
     )
 

@@ -87,7 +87,7 @@ def adjust_op2_carrier_demand_impacts(bridge_df: pd.DataFrame) -> pd.DataFrame:
                 bridge_df.at[idx, "carrier_and_demand_impact"] = new_carrier + new_demand
 
     # Calculate impacts in millions
-    distance = bridge_df.loc[mask_op2, "actual_distance"]
+    distance = bridge_df.loc[mask_op2, "actual_distance_km"]
 
     impacts = [
         "mix_impact",

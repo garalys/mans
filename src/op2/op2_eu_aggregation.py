@@ -81,12 +81,12 @@ def create_op2_eu_weekly_bridge(
         .groupby(["report_year", "report_week"], as_index=False)
         .agg(
             actual_cost=("total_cost_usd", "sum"),
-            actual_distance=("distance_for_cpkm", "sum"),
+            actual_distance_km=("distance_for_cpkm", "sum"),
             actual_loads=("executed_loads", "sum"),
         )
     )
 
-    actual_eu["compare_cpkm"] = actual_eu["actual_cost"] / actual_eu["actual_distance"]
+    actual_eu["compare_cpkm"] = actual_eu["actual_cost"] / actual_eu["actual_distance_km"]
 
     # Get actual carriers from YoY bridge (aggregate EU5 countries)
     yoy_carriers = _get_eu_carriers_from_yoy_bridge(final_bridge_df, business="Total")
@@ -105,9 +105,14 @@ def create_op2_eu_weekly_bridge(
         as_index=False,
     ).agg(
         op2_normalized_cost=("op2_normalized_cost", "sum"),
-        actual_distance=("actual_distance", "sum"),
     )
-    eu_norm["op2_normalized_cpkm"] = eu_norm["op2_normalized_cost"] / eu_norm["actual_distance"]
+    # Join with actual_eu to get distance for CPKM calculation
+    eu_norm = eu_norm.merge(
+        actual_eu[["report_year", "report_week", "actual_distance_km"]],
+        on=["report_year", "report_week"],
+        how="left",
+    )
+    eu_norm["op2_normalized_cpkm"] = eu_norm["op2_normalized_cost"] / eu_norm["actual_distance_km"]
 
     # Aggregate tech impact from country level
     country_tech = calculate_op2_tech_impact(df, df_op2, by_business=False)
@@ -157,7 +162,7 @@ def create_op2_eu_weekly_bridge(
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
     bridge["loads_variance_pct"] = (bridge["loads_variance"] / bridge["op2_base_loads"]) * 100
 
-    bridge["distance_variance_km"] = bridge["actual_distance"] - bridge["op2_base_distance"]
+    bridge["distance_variance_km"] = bridge["actual_distance_km"] - bridge["op2_base_distance"]
     bridge["distance_variance_pct"] = (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100
 
     bridge["cost_variance_mm"] = (bridge["actual_cost"] - bridge["op2_base_cost"]) / 1_000_000
@@ -168,19 +173,19 @@ def create_op2_eu_weekly_bridge(
     bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     bridge["tech_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_tech_impact_value"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_tech_impact_value"] / bridge["actual_distance_km"],
         0,
     )
 
     bridge["market_rate_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_market_impact"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_market_impact"] / bridge["actual_distance_km"],
         0,
     )
 
     bridge["bridging_value"] = bridge["report_year"] + "_" + bridge["report_week"] + "_OP2"
-    bridge["w2_distance_km"] = bridge["actual_distance"]
+    bridge["w2_distance_km"] = bridge["actual_distance_km"]
     bridge["benchmark_gap"] = bridge["compare_cpkm"] - bridge["op2_base_cpkm"]
 
     # Calculate carrier and demand impacts using EU coefficients
@@ -238,12 +243,12 @@ def create_op2_eu_weekly_business_bridge(
         .groupby(["report_year", "report_week", "business"], as_index=False)
         .agg(
             actual_cost=("total_cost_usd", "sum"),
-            actual_distance=("distance_for_cpkm", "sum"),
+            actual_distance_km=("distance_for_cpkm", "sum"),
             actual_loads=("executed_loads", "sum"),
         )
     )
 
-    actual_eu["compare_cpkm"] = actual_eu["actual_cost"] / actual_eu["actual_distance"]
+    actual_eu["compare_cpkm"] = actual_eu["actual_cost"] / actual_eu["actual_distance_km"]
 
     # Get actual carriers from YoY bridge by business
     yoy_carriers = _get_eu_carriers_from_yoy_bridge_by_business(final_bridge_df)
@@ -291,9 +296,14 @@ def create_op2_eu_weekly_business_bridge(
         as_index=False,
     ).agg(
         op2_normalized_cost=("op2_normalized_cost", "sum"),
-        actual_distance=("actual_distance", "sum"),
     )
-    eu_norm["op2_normalized_cpkm"] = eu_norm["op2_normalized_cost"] / eu_norm["actual_distance"]
+    # Join with actual_eu to get distance for CPKM calculation
+    eu_norm = eu_norm.merge(
+        actual_eu[["report_year", "report_week", "business", "actual_distance_km"]],
+        on=["report_year", "report_week", "business"],
+        how="left",
+    )
+    eu_norm["op2_normalized_cpkm"] = eu_norm["op2_normalized_cost"] / eu_norm["actual_distance_km"]
 
     # Aggregate tech impact from country x business level
     country_tech = calculate_op2_tech_impact(df, df_op2, by_business=True)
@@ -343,7 +353,7 @@ def create_op2_eu_weekly_business_bridge(
         0,
     )
 
-    bridge["distance_variance_km"] = bridge["actual_distance"] - bridge["op2_base_distance"]
+    bridge["distance_variance_km"] = bridge["actual_distance_km"] - bridge["op2_base_distance"]
     bridge["distance_variance_pct"] = np.where(
         bridge["op2_base_distance"] > 0,
         (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100,
@@ -362,14 +372,14 @@ def create_op2_eu_weekly_business_bridge(
     bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     bridge["tech_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_tech_impact_value"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_tech_impact_value"] / bridge["actual_distance_km"],
         0,
     )
 
     bridge["market_rate_impact"] = np.where(
-        bridge["actual_distance"] > 0,
-        bridge["op2_market_impact"] / bridge["actual_distance"],
+        bridge["actual_distance_km"] > 0,
+        bridge["op2_market_impact"] / bridge["actual_distance_km"],
         0,
     )
 
