@@ -140,8 +140,11 @@ def create_op2_weekly_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
-    # Get SET impact from YoY bridge
-    yoy_set_impact = get_set_impact_for_op2(final_bridge_df).copy()
+    # Get SET impact from YoY bridge - only select required columns to avoid conflicts
+    yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
+    # Explicitly filter to only required columns to prevent column conflicts
+    set_impact_cols = ["report_year", "report_week", "orig_country", "business", "set_impact"]
+    yoy_set_impact = yoy_set_impact[[c for c in set_impact_cols if c in yoy_set_impact.columns]].copy()
     logger.info(f"yoy_set_impact columns: {yoy_set_impact.columns.tolist()}")
     logger.info(f"yoy_set_impact shape: {yoy_set_impact.shape}")
 
@@ -291,8 +294,11 @@ def create_op2_weekly_country_business_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
-    # Get SET impact from YoY bridge
-    yoy_set_impact = get_set_impact_for_op2(final_bridge_df).copy()
+    # Get SET impact from YoY bridge - only select required columns to avoid conflicts
+    yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
+    # Explicitly filter to only required columns to prevent column conflicts
+    set_impact_cols = ["report_year", "report_week", "orig_country", "business", "set_impact"]
+    yoy_set_impact = yoy_set_impact[[c for c in set_impact_cols if c in yoy_set_impact.columns]].copy()
 
     # Ensure dtypes match for merge
     for col in ["report_year", "report_week", "orig_country", "business"]:

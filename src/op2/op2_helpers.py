@@ -40,10 +40,18 @@ def get_set_impact_for_op2(final_bridge_df: pd.DataFrame) -> pd.DataFrame:
     """
     logger.info("Preparing YoY SET lookup for OP2 weekly bridge...")
 
-    yoy_set_lookup = final_bridge_df[
+    # Filter YoY rows with set_impact
+    yoy_filtered = final_bridge_df[
         (final_bridge_df["bridge_type"] == "YoY")
         & (final_bridge_df["set_impact"].notna())
-    ][["report_year", "report_week", "orig_country", "business", "set_impact"]]
+    ]
+
+    # Explicitly select only required columns to avoid any conflicts
+    required_cols = ["report_year", "report_week", "orig_country", "business", "set_impact"]
+    available_cols = [c for c in required_cols if c in yoy_filtered.columns]
+    yoy_set_lookup = yoy_filtered[available_cols].copy()
+
+    logger.info(f"YoY SET lookup columns: {yoy_set_lookup.columns.tolist()}")
 
     return yoy_set_lookup
 
