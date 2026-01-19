@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  analytics:
+    build: .
+    environment:
+      # S3 Configuration
+      - SOURCE_BUCKET=${SOURCE_BUCKET}
+      - SOURCE_KEY=${SOURCE_KEY}
+      - CARRIER_SCALING_BUCKET=${CARRIER_SCALING_BUCKET}
+      - CARRIER_SCALING_KEY=${CARRIER_SCALING_KEY}
+      - OP2_BUCKET=${OP2_BUCKET}
+      - OP2_KEY=${OP2_KEY}
+      - DESTINATION_BUCKET=${DESTINATION_BUCKET}
+      - DESTINATION_KEY=${DESTINATION_KEY}
+
+      # AWS Credentials (use IAM roles in production)
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-1}
+
+      # Volume Coefficients
+      - DE_SLOPE=${DE_SLOPE:-0}
+      - DE_INTERCEPT=${DE_INTERCEPT:-0}
+      - ES_SLOPE=${ES_SLOPE:-0}
+      - ES_INTERCEPT=${ES_INTERCEPT:-0}
+      - FR_SLOPE=${FR_SLOPE:-0}
+      - FR_INTERCEPT=${FR_INTERCEPT:-0}
+      - IT_SLOPE=${IT_SLOPE:-0}
+      - IT_INTERCEPT=${IT_INTERCEPT:-0}
+      - UK_SLOPE=${UK_SLOPE:-0}
+      - UK_INTERCEPT=${UK_INTERCEPT:-0}
+      - EU_SLOPE=${EU_SLOPE:-0}
+      - EU_INTERCEPT=${EU_INTERCEPT:-0}
+
+      # LCR Coefficients
+      - DE_SLOPE_LCR=${DE_SLOPE_LCR:-0}
+      - DE_POLY_LCR=${DE_POLY_LCR:-0}
+      - DE_INTERCEPT_LCR=${DE_INTERCEPT_LCR:-0}
+      - ES_SLOPE_LCR=${ES_SLOPE_LCR:-0}
+      - ES_POLY_LCR=${ES_POLY_LCR:-0}
+      - ES_INTERCEPT_LCR=${ES_INTERCEPT_LCR:-0}
+      - FR_SLOPE_LCR=${FR_SLOPE_LCR:-0}
+      - FR_POLY_LCR=${FR_POLY_LCR:-0}
+      - FR_INTERCEPT_LCR=${FR_INTERCEPT_LCR:-0}
+      - IT_SLOPE_LCR=${IT_SLOPE_LCR:-0}
+      - IT_POLY_LCR=${IT_POLY_LCR:-0}
+      - IT_INTERCEPT_LCR=${IT_INTERCEPT_LCR:-0}
+      - UK_SLOPE_LCR=${UK_SLOPE_LCR:-0}
+      - UK_POLY_LCR=${UK_POLY_LCR:-0}
+      - UK_INTERCEPT_LCR=${UK_INTERCEPT_LCR:-0}
+      - EU_SLOPE_LCR=${EU_SLOPE_LCR:-0}
+      - EU_POLY_LCR=${EU_POLY_LCR:-0}
+      - EU_INTERCEPT_LCR=${EU_INTERCEPT_LCR:-0}
+
+      # Tech Savings Rates (add as needed)
+      # Format: TECH_SAVINGS_RATE_{YEAR}_W{START}_W{END}
+      - TECH_SAVINGS_RATE_2025_W27_W46=${TECH_SAVINGS_RATE_2025_W27_W46:-0}
+      - TECH_SAVINGS_RATE_2025_W47_W52=${TECH_SAVINGS_RATE_2025_W47_W52:-0}
+      - TECH_SAVINGS_RATE_2026_W1_W18=${TECH_SAVINGS_RATE_2026_W1_W18:-0}
+
+    # Optional: Mount AWS credentials
+    # volumes:
+    #   - ~/.aws:/root/.aws:ro
