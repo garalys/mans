@@ -443,4 +443,4 @@ def calculate_op2_market_rate_impact(
 
         # Delta = YoY actual - OP2 planned
         out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
-        return out
+        return out[["report_year", "report_week", "orig_country", "op2_market_impact"]]
