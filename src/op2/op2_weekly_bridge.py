@@ -145,12 +145,27 @@ def create_op2_weekly_bridge(
     logger.info(f"yoy_set_impact columns: {yoy_set_impact.columns.tolist()}")
     logger.info(f"yoy_set_impact shape: {yoy_set_impact.shape}")
 
+    # Ensure dtypes match for merge
+    for col in ["report_year", "report_week", "orig_country", "business"]:
+        bridge[col] = bridge[col].astype(str)
+        if col in yoy_set_impact.columns:
+            yoy_set_impact[col] = yoy_set_impact[col].astype(str)
+
     bridge = bridge.merge(
         yoy_set_impact,
         on=["report_year", "report_week", "orig_country", "business"],
         how="left",
     )
     logger.info(f"After yoy_set_impact merge - columns: {bridge.columns.tolist()}")
+    logger.info(f"After yoy_set_impact merge - shape: {bridge.shape}")
+
+    # Sanity check - ensure required columns exist
+    required_cols = ["actual_distance", "actual_cost", "actual_loads", "op2_base_distance", "op2_base_cost", "op2_base_loads"]
+    missing_cols = [col for col in required_cols if col not in bridge.columns]
+    if missing_cols:
+        logger.error(f"Missing required columns after merges: {missing_cols}")
+        logger.error(f"Available columns: {bridge.columns.tolist()}")
+        raise KeyError(f"Missing required columns: {missing_cols}")
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
