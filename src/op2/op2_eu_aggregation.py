@@ -234,12 +234,17 @@ def create_op2_eu_weekly_business_bridge(
 
     eu_countries = ["DE", "ES", "FR", "IT", "UK"]
 
+    # Filter to EU5 countries with valid weeks
+    df_eu = df[
+        (df["report_week"].notna())
+        & (df["orig_country"].isin(eu_countries))
+    ].copy()
+    # Normalize business to uppercase for consistent matching
+    df_eu["business"] = df_eu["business"].str.upper()
+
     # Aggregate actual data by business across all EU5 countries
     actual_eu = (
-        df[
-            (df["report_week"].notna())
-            & (df["orig_country"].isin(eu_countries))
-        ]
+        df_eu
         .groupby(["report_year", "report_week", "business"], as_index=False)
         .agg(
             actual_cost=("total_cost_usd", "sum"),
@@ -250,24 +255,28 @@ def create_op2_eu_weekly_business_bridge(
 
     actual_eu["compare_cpkm"] = actual_eu["actual_cost"] / actual_eu["actual_distance_km"]
 
-    # Get actual carriers from YoY bridge by business
-    yoy_carriers = _get_eu_carriers_from_yoy_bridge_by_business(final_bridge_df)
-    actual_eu = actual_eu.merge(
-        yoy_carriers,
-        on=["report_year", "report_week", "business"],
-        how="left",
+    # Calculate actual carriers directly from source data (count unique carriers across EU countries by business)
+    actual_eu["actual_carriers"] = actual_eu.apply(
+        lambda r: df_eu[
+            (df_eu["report_year"] == r["report_year"])
+            & (df_eu["report_week"] == r["report_week"])
+            & (df_eu["business"] == r["business"])
+            & (df_eu["executed_loads"] > 0)
+        ]["vehicle_carrier"].nunique(),
+        axis=1,
     )
-    actual_eu["actual_carriers"] = actual_eu["actual_carriers"].fillna(0)
 
     # Aggregate OP2 base metrics from country x business level
     # (since EU doesn't have business splits in OP2 data)
     country_business_norm = compute_op2_normalized_cpkm_weekly(df, df_op2, by_business=True)
     country_business_norm = country_business_norm[country_business_norm["orig_country"].isin(eu_countries)]
+    country_business_norm["business"] = country_business_norm["business"].str.upper()
 
     # Also aggregate base metrics from country x business
     from .op2_data_extractor import extract_op2_weekly_base_by_business
     country_business_base = extract_op2_weekly_base_by_business(df_op2)
     country_business_base = country_business_base[country_business_base["orig_country"].isin(eu_countries)]
+    country_business_base["business"] = country_business_base["business"].str.upper()
 
     eu_base = country_business_base.groupby(
         ["report_year", "report_week", "business"],
@@ -308,6 +317,7 @@ def create_op2_eu_weekly_business_bridge(
     # Aggregate tech impact from country x business level
     country_tech = calculate_op2_tech_impact(df, df_op2, by_business=True)
     country_tech = country_tech[country_tech["orig_country"].isin(eu_countries)]
+    country_tech["business"] = country_tech["business"].str.upper()
     eu_tech = country_tech.groupby(
         ["report_year", "report_week", "business"],
         as_index=False,
@@ -316,6 +326,7 @@ def create_op2_eu_weekly_business_bridge(
     # Aggregate market rate impact from country x business level
     country_market = calculate_op2_market_rate_impact(df, df_op2, final_bridge_df, by_business=True)
     country_market = country_market[country_market["orig_country"].isin(eu_countries)]
+    country_market["business"] = country_market["business"].str.upper()
     eu_market = country_market.groupby(
         ["report_year", "report_week", "business"],
         as_index=False,
