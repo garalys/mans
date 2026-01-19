@@ -292,22 +292,41 @@ def create_op2_weekly_country_business_bridge(
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
     # Get SET impact from YoY bridge
-    yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
+    yoy_set_impact = get_set_impact_for_op2(final_bridge_df).copy()
+
+    # Ensure dtypes match for merge
+    for col in ["report_year", "report_week", "orig_country", "business"]:
+        bridge[col] = bridge[col].astype(str)
+        if col in yoy_set_impact.columns:
+            yoy_set_impact[col] = yoy_set_impact[col].astype(str)
+
     bridge = bridge.merge(
         yoy_set_impact,
         on=["report_year", "report_week", "orig_country", "business"],
         how="left",
     )
 
-    # Calculate variance metrics
+    # Calculate variance metrics using np.where to handle missing values
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
-    bridge["loads_variance_pct"] = (bridge["loads_variance"] / bridge["op2_base_loads"]) * 100
+    bridge["loads_variance_pct"] = np.where(
+        bridge["op2_base_loads"] > 0,
+        (bridge["loads_variance"] / bridge["op2_base_loads"]) * 100,
+        0,
+    )
 
     bridge["distance_variance_km"] = bridge["actual_distance"] - bridge["op2_base_distance"]
-    bridge["distance_variance_pct"] = (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100
+    bridge["distance_variance_pct"] = np.where(
+        bridge["op2_base_distance"] > 0,
+        (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100,
+        0,
+    )
 
     bridge["cost_variance_mm"] = (bridge["actual_cost"] - bridge["op2_base_cost"]) / 1_000_000
-    bridge["cost_variance_pct"] = ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100
+    bridge["cost_variance_pct"] = np.where(
+        bridge["op2_base_cost"] > 0,
+        ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
+        0,
+    )
 
     bridge["compare_cpkm_vs_normalised_op2_cpkm"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
     bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
