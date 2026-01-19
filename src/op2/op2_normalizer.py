@@ -116,22 +116,28 @@ def compute_op2_normalized_cpkm_weekly(
             as_index=False,
         ).agg(
             op2_normalized_cost=("normalized_cost", "sum"),
-            actual_distance=("actual_distance", "sum"),
+            norm_distance=("actual_distance", "sum"),  # Renamed to avoid conflicts
         )
-        out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["actual_distance"]
+        out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["norm_distance"]
         logger.info(f"sum op2 norm: {out['op2_normalized_cpkm'].sum()}")
-        return out[["report_year", "report_week", "orig_country", "business", "op2_normalized_cost", "op2_normalized_cpkm"]]
+        # Explicitly select and copy to avoid any column leakage
+        result = out[["report_year", "report_week", "orig_country", "business", "op2_normalized_cost", "op2_normalized_cpkm"]].copy()
+        logger.info(f"op2_norm returning columns: {result.columns.tolist()}")
+        return result
     else:
         out = merged.groupby(
             ["report_year", "report_week", "orig_country"],
             as_index=False,
         ).agg(
             op2_normalized_cost=("normalized_cost", "sum"),
-            actual_distance=("actual_distance", "sum"),
+            norm_distance=("actual_distance", "sum"),  # Renamed to avoid conflicts
         )
-        out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["actual_distance"]
+        out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["norm_distance"]
         logger.info(f"sum op2 norm: {out['op2_normalized_cpkm'].sum()}")
-        return out[["report_year", "report_week", "orig_country", "op2_normalized_cost", "op2_normalized_cpkm"]]
+        # Explicitly select and copy to avoid any column leakage
+        result = out[["report_year", "report_week", "orig_country", "op2_normalized_cost", "op2_normalized_cpkm"]].copy()
+        logger.info(f"op2_norm returning columns: {result.columns.tolist()}")
+        return result
 
 
 def compute_op2_normalized_cpkm_monthly(
