@@ -141,7 +141,7 @@ def create_op2_weekly_bridge(
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
     # Get SET impact from YoY bridge
-    yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
+    yoy_set_impact = get_set_impact_for_op2(final_bridge_df).copy()
     logger.info(f"yoy_set_impact columns: {yoy_set_impact.columns.tolist()}")
     logger.info(f"yoy_set_impact shape: {yoy_set_impact.shape}")
 
