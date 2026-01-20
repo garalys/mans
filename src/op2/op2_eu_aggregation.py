@@ -1312,3 +1312,231 @@ def create_op2_eu_quarterly_bridge(
 
     logger.info(f"Created {len(bridge)} OP2 EU-total quarterly bridge rows")
     return bridge
+
+
+def create_op2_eu_quarterly_business_bridge(
+    df: pd.DataFrame,
+    df_op2: pd.DataFrame,
+    df_carrier: pd.DataFrame,
+    final_bridge_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Create OP2 quarterly benchmark bridge at EU x business level.
+
+    OP2 doesn't have quarterly data at business level, so OP2 base metrics
+    are aggregated from monthly_bridge data across EU countries.
+    Other metrics aggregated from monthly EU business bridges.
+
+    Input Tables:
+        Same as create_op2_eu_quarterly_bridge
+
+    Output Table:
+        Same structure but with business dimension
+    """
+    from .op2_data_extractor import extract_op2_monthly_base_by_business, extract_op2_quarterly_base_cpkm
+
+    logger.info("Creating OP2 EU x business quarterly bridge...")
+
+    eu_countries = ["DE", "ES", "FR", "IT", "UK"]
+
+    # Add quarter column to actual data
+    df_eu = df[
+        (df["report_month"].notna())
+        & (df["orig_country"].isin(eu_countries))
+    ].copy()
+    df_eu["report_quarter"] = df_eu["report_month"].apply(_get_quarter_from_month)
+    df_eu["business"] = df_eu["business"].str.upper()
+
+    # Aggregate actual quarterly data by business across EU
+    actual_eu = (
+        df_eu
+        .groupby(["report_year", "report_quarter", "business"], as_index=False)
+        .agg(
+            actual_cost=("total_cost_usd", "sum"),
+            actual_distance_km=("distance_for_cpkm", "sum"),
+            actual_loads=("executed_loads", "sum"),
+        )
+    )
+
+    # Calculate carriers per quarter by business
+    actual_eu["actual_carriers"] = actual_eu.apply(
+        lambda r: df_eu[
+            (df_eu["report_year"] == r["report_year"])
+            & (df_eu["report_quarter"] == r["report_quarter"])
+            & (df_eu["business"] == r["business"])
+            & (df_eu["executed_loads"] > 0)
+        ]["vehicle_carrier"].nunique(),
+        axis=1,
+    )
+
+    actual_eu["compare_cpkm"] = actual_eu["actual_cost"] / actual_eu["actual_distance_km"]
+
+    # Get OP2 base from monthly business data across EU countries and aggregate to quarterly
+    monthly_base = extract_op2_monthly_base_by_business(df_op2)
+    monthly_base = monthly_base[monthly_base["orig_country"].isin(eu_countries)]
+    monthly_base["report_quarter"] = monthly_base["report_month"].apply(_get_quarter_from_month)
+    monthly_base["business"] = monthly_base["business"].str.upper()
+
+    # Aggregate to EU quarterly by business
+    op2_base = monthly_base.groupby(
+        ["report_year", "report_quarter", "business"],
+        as_index=False,
+    ).agg(
+        op2_base_distance=("op2_base_distance", "sum"),
+        op2_base_cost=("op2_base_cost", "sum"),
+        op2_base_loads=("op2_base_loads", "sum"),
+    )
+    op2_base["op2_base_cpkm"] = op2_base["op2_base_cost"] / op2_base["op2_base_distance"]
+
+    # Get quarterly carriers from EU-level quarterly data
+    quarterly_base = extract_op2_quarterly_base_cpkm(df_op2)
+    eu_carriers = quarterly_base[quarterly_base["orig_country"] == "EU"][
+        ["report_year", "report_quarter", "op2_carriers"]
+    ]
+    op2_base = op2_base.merge(
+        eu_carriers,
+        on=["report_year", "report_quarter"],
+        how="left",
+    )
+
+    # Aggregate from EU monthly business bridges for impacts
+    monthly_eu_op2 = final_bridge_df[
+        (final_bridge_df["bridge_type"] == "op2_monthly")
+        & (final_bridge_df["business"] != "Total")
+        & (final_bridge_df["orig_country"] == "EU")
+    ].copy()
+
+    if not monthly_eu_op2.empty:
+        monthly_eu_op2["report_quarter"] = monthly_eu_op2["report_month"].apply(_get_quarter_from_month)
+        monthly_eu_op2["business"] = monthly_eu_op2["business"].str.upper()
+
+        quarterly_metrics = monthly_eu_op2.groupby(
+            ["report_year", "report_quarter", "business"],
+            as_index=False,
+        ).agg(
+            op2_normalized_cost=("normalised_cpkm", lambda x: (x * monthly_eu_op2.loc[x.index, "actual_distance_km"]).sum()),
+            norm_distance=("actual_distance_km", "sum"),
+            op2_tech_impact_value=("tech_impact", lambda x: (x * monthly_eu_op2.loc[x.index, "actual_distance_km"]).sum()),
+            op2_market_impact=("market_rate_impact", lambda x: (x * monthly_eu_op2.loc[x.index, "actual_distance_km"]).sum()),
+            set_impact_sum=("set_impact", lambda x: (x * monthly_eu_op2.loc[x.index, "actual_distance_km"]).sum() if x.notna().any() else 0),
+        )
+        quarterly_metrics["op2_normalized_cpkm"] = quarterly_metrics["op2_normalized_cost"] / quarterly_metrics["norm_distance"]
+    else:
+        quarterly_metrics = pd.DataFrame()
+
+    # Merge components
+    bridge = actual_eu.merge(
+        op2_base,
+        on=["report_year", "report_quarter", "business"],
+        how="left",
+    )
+
+    if not quarterly_metrics.empty:
+        bridge = bridge.merge(
+            quarterly_metrics[["report_year", "report_quarter", "business",
+                              "op2_normalized_cpkm", "op2_tech_impact_value", "op2_market_impact",
+                              "set_impact_sum", "norm_distance"]],
+            on=["report_year", "report_quarter", "business"],
+            how="left",
+        )
+
+    # Fill bridge schema
+    bridge["bridge_type"] = "op2_quarterly"
+    bridge["orig_country"] = "EU"
+    bridge["base_cpkm"] = bridge["op2_base_cpkm"]
+    bridge["normalised_cpkm"] = bridge.get("op2_normalized_cpkm", bridge["op2_base_cpkm"])
+
+    # SET impact
+    if "set_impact_sum" in bridge.columns and "norm_distance" in bridge.columns:
+        bridge["set_impact"] = np.where(
+            bridge["norm_distance"] > 0,
+            bridge["set_impact_sum"] / bridge["norm_distance"],
+            0,
+        )
+    else:
+        bridge["set_impact"] = None
+
+    # Calculate variance metrics
+    bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
+    bridge["loads_variance_pct"] = np.where(
+        bridge["op2_base_loads"] > 0,
+        (bridge["loads_variance"] / bridge["op2_base_loads"]) * 100,
+        0,
+    )
+
+    bridge["distance_variance_km"] = bridge["actual_distance_km"] - bridge["op2_base_distance"]
+    bridge["distance_variance_pct"] = np.where(
+        bridge["op2_base_distance"] > 0,
+        (bridge["distance_variance_km"] / bridge["op2_base_distance"]) * 100,
+        0,
+    )
+
+    bridge["cpkm_variance"] = bridge["compare_cpkm"] - bridge["op2_base_cpkm"]
+    bridge["cpkm_variance_pct"] = np.where(
+        bridge["op2_base_cpkm"] > 0,
+        (bridge["cpkm_variance"] / bridge["op2_base_cpkm"]) * 100,
+        0,
+    )
+
+    bridge["cost_variance_mm"] = (bridge["actual_cost"] - bridge["op2_base_cost"]) / 1_000_000
+    bridge["cost_variance_pct"] = np.where(
+        bridge["op2_base_cost"] > 0,
+        ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
+        0,
+    )
+
+    # Normalized metrics
+    if "op2_normalized_cpkm" in bridge.columns:
+        bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
+        bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
+    else:
+        bridge["normalized_variance"] = 0
+        bridge["mix_impact"] = 0
+
+    # Per-km impacts
+    if "op2_tech_impact_value" in bridge.columns:
+        bridge["tech_impact"] = np.where(
+            bridge["actual_distance_km"] > 0,
+            bridge["op2_tech_impact_value"].fillna(0) / bridge["actual_distance_km"],
+            0,
+        )
+    else:
+        bridge["tech_impact"] = 0
+
+    if "op2_market_impact" in bridge.columns:
+        bridge["market_rate_impact"] = np.where(
+            bridge["actual_distance_km"] > 0,
+            bridge["op2_market_impact"].fillna(0) / bridge["actual_distance_km"],
+            0,
+        )
+    else:
+        bridge["market_rate_impact"] = 0
+
+    bridge["bridging_value"] = bridge["report_year"] + "_" + bridge["report_quarter"] + "_OP2"
+    bridge["m2_distance_km"] = bridge["actual_distance_km"]
+    bridge["benchmark_gap"] = bridge["compare_cpkm"] - bridge["op2_base_cpkm"]
+
+    # Calculate carrier and demand impacts using EU coefficients
+    bridge[["carrier_impact", "demand_impact"]] = bridge.apply(
+        lambda r: _calculate_eu_op2_carrier_demand_impacts(
+            actual_loads=r["actual_loads"],
+            actual_carriers=r["actual_carriers"],
+            op2_loads=r["op2_base_loads"] if pd.notna(r["op2_base_loads"]) else r["actual_loads"],
+            op2_carriers=r["op2_carriers"] if pd.notna(r["op2_carriers"]) else r["actual_carriers"],
+            base_cpkm=r["op2_normalized_cpkm"] if pd.notna(r.get("op2_normalized_cpkm")) else r["compare_cpkm"],
+            df_carrier=df_carrier,
+            compare_year=int(r["report_year"].replace("R", "")),
+            report_month=r["report_quarter"],
+        ),
+        axis=1,
+        result_type="expand",
+    )
+
+    bridge["carrier_and_demand_impact"] = bridge["carrier_impact"] + bridge["demand_impact"]
+
+    # Null out non-applicable fields
+    for col in ["premium_impact", "supply_rates", "report_week", "report_month"]:
+        bridge[col] = None
+
+    logger.info(f"Created {len(bridge)} OP2 EU x business quarterly bridge rows")
+    return bridge
