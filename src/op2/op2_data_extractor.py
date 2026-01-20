@@ -205,3 +205,82 @@ def extract_op2_monthly_base_cpkm(df_op2: pd.DataFrame) -> pd.DataFrame:
         "op2_carriers",
         "op2_lcr",
     ]]
+
+
+def extract_op2_monthly_base_by_business(df_op2: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract OP2 monthly base metrics broken down by business.
+
+    Aggregates OP2 monthly detailed data to the business level and
+    joins carrier information from the aggregated table.
+
+    Input Table - df_op2 (raw OP2 data):
+        | Column          | Type   | Description                     |
+        |-----------------|--------|---------------------------------|
+        | Bridge type     | string | 'monthly_bridge' for detailed   |
+        | Report Year     | string | Year in R20XX format            |
+        | Report Month    | string | Month in MXX format             |
+        | Orig_EU5        | string | Origin country code             |
+        | Business Flow   | string | Business unit identifier        |
+        | Distance Band   | string | Distance Band                   |
+        | Distance        | float  | Distance in kilometers          |
+        | Cost            | float  | Total cost                      |
+        | Loads           | int    | Number of loads                 |
+
+    Output Table:
+        | Column            | Type   | Description                   |
+        |-------------------|--------|-------------------------------|
+        | report_year       | string | Year in R20XX format          |
+        | report_month      | string | Month in MXX format           |
+        | orig_country      | string | Origin country code           |
+        | business          | string | Business unit (uppercase)     |
+        | op2_base_distance | float  | OP2 baseline distance         |
+        | op2_base_cost     | float  | OP2 baseline cost             |
+        | op2_base_loads    | int    | OP2 baseline loads            |
+        | op2_base_cpkm     | float  | OP2 baseline CPKM             |
+        | op2_carriers      | int    | OP2 active carriers           |
+    """
+    # Filter OP2 monthly detailed data
+    op2 = df_op2[df_op2["Bridge type"] == "monthly_bridge"].copy()
+
+    op2 = op2.rename(columns={
+        "Report Year": "report_year",
+        "Report Month": "report_month",
+        "Orig_EU5": "orig_country",
+        "Dest_EU5": "dest_country",
+        "Business Flow": "business",
+        "Distance Band": "distance_band",
+        "Distance": "op2_distance",
+        "Cost": "op2_cost",
+        "Loads": "op2_base_loads",
+    })
+
+    # Normalize types
+    op2["report_year"] = op2["report_year"].astype(str)
+    op2["report_month"] = op2["report_month"].astype(str)
+    op2["orig_country"] = op2["orig_country"].astype(str)
+    op2["dest_country"] = op2["dest_country"].astype(str)
+    op2["business"] = op2["business"].astype(str).str.upper()
+    op2["distance_band"] = op2["distance_band"].astype(str)
+
+    # Aggregate to business level
+    out = op2.groupby(
+        ["report_year", "report_month", "orig_country", "business"],
+        as_index=False,
+    ).agg(
+        op2_base_distance=("op2_distance", "sum"),
+        op2_base_cost=("op2_cost", "sum"),
+        op2_base_loads=("op2_base_loads", "sum"),
+    )
+
+    out["op2_base_cpkm"] = out["op2_base_cost"] / out["op2_base_distance"]
+
+    # Join carrier information from aggregated table
+    carriers = extract_op2_monthly_base_cpkm(df_op2)
+    out = out.merge(
+        carriers[["report_year", "report_month", "orig_country", "op2_carriers"]],
+        on=["report_year", "report_month", "orig_country"],
+        how="inner",
+    )
+
+    return out

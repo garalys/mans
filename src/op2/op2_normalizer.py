@@ -143,6 +143,7 @@ def compute_op2_normalized_cpkm_weekly(
 def compute_op2_normalized_cpkm_monthly(
     actual_df: pd.DataFrame,
     df_op2: pd.DataFrame,
+    by_business: bool = False,
 ) -> pd.DataFrame:
     """
     Apply OP2 monthly rates to actual monthly volumes.
@@ -158,7 +159,12 @@ def compute_op2_normalized_cpkm_monthly(
         | Report Month    | string | Month in MXX format             |
         | + same dimensional columns as weekly                        |
 
-    Output Table:
+    Args:
+        actual_df: Actual transportation data
+        df_op2: OP2 benchmark reference data
+        by_business: If True, return results at business level
+
+    Output Table (by_business=False):
         | Column               | Type   | Description                  |
         |----------------------|--------|------------------------------|
         | report_year          | string | Year in R20XX format         |
@@ -166,6 +172,10 @@ def compute_op2_normalized_cpkm_monthly(
         | orig_country         | string | Origin country code          |
         | op2_normalized_cost  | float  | Total normalized cost        |
         | op2_normalized_cpkm  | float  | Normalized CPKM              |
+
+    Output Table (by_business=True):
+        Same as above plus:
+        | business             | string | Business unit                |
     """
     # Prepare OP2 monthly data
     op2 = df_op2[df_op2["Bridge type"] == "monthly_bridge"].copy()
@@ -217,14 +227,23 @@ def compute_op2_normalized_cpkm_monthly(
     merged["normalized_cost"] = merged["op2_cpkm"] * merged["actual_distance"]
 
     # Aggregate to output grain
-    out = merged.groupby(
-        ["report_year", "report_month", "orig_country"],
-        as_index=False,
-    ).agg(
-        op2_normalized_cost=("normalized_cost", "sum"),
-        actual_distance=("actual_distance", "sum"),
-    )
-
-    out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["actual_distance"]
-
-    return out[["report_year", "report_month", "orig_country", "op2_normalized_cost", "op2_normalized_cpkm"]]
+    if by_business:
+        out = merged.groupby(
+            ["report_year", "report_month", "orig_country", "business"],
+            as_index=False,
+        ).agg(
+            op2_normalized_cost=("normalized_cost", "sum"),
+            norm_distance=("actual_distance", "sum"),
+        )
+        out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["norm_distance"]
+        return out[["report_year", "report_month", "orig_country", "business", "op2_normalized_cost", "op2_normalized_cpkm"]]
+    else:
+        out = merged.groupby(
+            ["report_year", "report_month", "orig_country"],
+            as_index=False,
+        ).agg(
+            op2_normalized_cost=("normalized_cost", "sum"),
+            actual_distance=("actual_distance", "sum"),
+        )
+        out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["actual_distance"]
+        return out[["report_year", "report_month", "orig_country", "op2_normalized_cost", "op2_normalized_cpkm"]]
