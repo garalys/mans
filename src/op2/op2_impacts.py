@@ -444,3 +444,301 @@ def calculate_op2_market_rate_impact(
         # Delta = YoY actual - OP2 planned
         out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
         return out[["report_year", "report_week", "orig_country", "op2_market_impact"]]
+
+
+def calculate_op2_tech_impact_monthly(
+    df: pd.DataFrame,
+    df_op2: pd.DataFrame,
+    by_business: bool = False,
+) -> pd.DataFrame:
+    """
+    Calculate OP2 tech impact for monthly bridge based on actual volumes and tech rates.
+
+    Computes the delta between actual tech savings and OP2 planned savings.
+
+    Input Table - df (actual data):
+        | Column           | Type   | Description                    |
+        |------------------|--------|--------------------------------|
+        | report_year      | string | Year in R20XX format           |
+        | report_month     | string | Month in MXX format            |
+        | orig_country     | string | Origin country code            |
+        | dest_country     | string | Destination country code       |
+        | business         | string | Business unit                  |
+        | distance_band    | string | Distance category              |
+        | total_cost_usd   | float  | Actual cost in USD             |
+
+    Input Table - df_op2 (OP2 data):
+        | Column           | Type   | Description                    |
+        |------------------|--------|--------------------------------|
+        | Bridge type      | string | Must be 'monthly'              |
+        | Tech Initiative  | float  | OP2 tech impact rate           |
+        | Distance         | float  | OP2 distance                   |
+        | + dimensional columns                                       |
+
+    Output Table:
+        | Column                 | Type   | Description                |
+        |------------------------|--------|----------------------------|
+        | report_year            | string | Year in R20XX format       |
+        | report_month           | string | Month in MXX format        |
+        | orig_country           | string | Origin country code        |
+        | business (if by_business) | string | Business unit           |
+        | op2_tech_impact_value  | float  | Tech impact delta in USD   |
+    """
+    # Prepare OP2 monthly data
+    op2 = df_op2[df_op2["Bridge type"] == "monthly"].copy()
+
+    op2 = op2.rename(columns={
+        "Report Year": "report_year",
+        "Report Month": "report_month",
+        "Orig_EU5": "orig_country",
+        "Dest_EU5": "dest_country",
+        "Business Flow": "business",
+        "Distance Band": "distance_band",
+        "Distance": "op2_distance",
+        "Tech Initiative": "op2_tech_impact",
+    })
+
+    logger.info("OP2 MONTHLY TECH INITIATIVE STATS")
+    if "op2_tech_impact" in op2.columns:
+        logger.info(op2["op2_tech_impact"].describe())
+
+    # Normalize types
+    for col in ["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"]:
+        if col in op2.columns:
+            op2[col] = op2[col].astype(str)
+    op2["business"] = op2["business"].str.upper()
+
+    # Calculate OP2 tech impact value
+    op2["op2_tech_impact_value"] = op2["op2_distance"] * op2["op2_tech_impact"].fillna(0)
+
+    # Prepare actual data
+    actual = df.groupby(
+        ["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"],
+        as_index=False,
+    ).agg(actual_cost=("total_cost_usd", "sum"))
+
+    # Normalize types
+    for col in ["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"]:
+        actual[col] = actual[col].astype(str)
+    actual["business"] = actual["business"].str.upper()
+    actual["distance_band"] = (
+        actual["distance_band"]
+        .str.strip()
+        .str.replace(r"^\d+\.", "", regex=True)
+    )
+
+    # Calculate tech rate for actual data (use month midpoint week approximation)
+    def _get_rate(row):
+        month_num = int(row["report_month"].replace("M", ""))
+        year_num = int(row["report_year"].replace("R", ""))
+        # Approximate week from month (month * 4.33)
+        week_num = int(month_num * 4.33)
+        return get_tech_savings_rate(year_num, week_num)
+
+    actual["tech_rate"] = actual.apply(_get_rate, axis=1)
+    actual["TY_tech_impact"] = actual["actual_cost"] * actual["tech_rate"]
+
+    # Join OP2 tech impact
+    merged = actual.merge(
+        op2[["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band", "op2_tech_impact_value"]],
+        on=["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"],
+        how="inner",
+    )
+
+    # Calculate delta
+    merged["tech_impact_delta"] = merged["TY_tech_impact"] - merged["op2_tech_impact_value"]
+
+    # Aggregate to output grain
+    if by_business:
+        out = merged.groupby(
+            ["report_year", "report_month", "orig_country", "business"],
+            as_index=False,
+        ).agg(op2_tech_impact_value=("tech_impact_delta", "sum"))
+        return out[["report_year", "report_month", "orig_country", "business", "op2_tech_impact_value"]]
+    else:
+        out = merged.groupby(
+            ["report_year", "report_month", "orig_country"],
+            as_index=False,
+        ).agg(op2_tech_impact_value=("tech_impact_delta", "sum"))
+        return out[["report_year", "report_month", "orig_country", "op2_tech_impact_value"]]
+
+
+def calculate_op2_market_rate_impact_monthly(
+    df: pd.DataFrame,
+    df_op2: pd.DataFrame,
+    final_bridge_df: pd.DataFrame,
+    by_business: bool = False,
+) -> pd.DataFrame:
+    """
+    Calculate OP2 market rate impact for monthly bridge as delta between MTD actual and OP2 planned.
+
+    Formula: market_impact_delta = MTD_market_rate_impact - OP2_market_impact
+
+    Input Table - df (actual data):
+        | Column           | Type   | Description                    |
+        |------------------|--------|--------------------------------|
+        | report_year      | string | Year in R20XX format           |
+        | report_month     | string | Month in MXX format            |
+        | orig_country     | string | Origin country code            |
+        | dest_country     | string | Destination country code       |
+        | business         | string | Business unit                  |
+        | distance_band    | string | Distance category              |
+        | distance_for_cpkm| float  | Distance in kilometers         |
+        | total_cost_usd   | float  | Cost in USD                    |
+
+    Input Table - df_op2 (OP2 data):
+        | Column          | Type   | Description                     |
+        |-----------------|--------|---------------------------------|
+        | Bridge type     | string | Must be 'monthly'               |
+        | CpKM            | float  | OP2 cost per kilometer          |
+        | Market Rate     | float  | OP2 market rate value           |
+        | + dimensional columns                                       |
+
+    Input Table - final_bridge_df (MTD bridge with market rate impact):
+        | Column              | Type   | Description                   |
+        |---------------------|--------|-------------------------------|
+        | bridge_type         | string | Filter for 'MTD'              |
+        | report_year         | string | Year in R20XX format          |
+        | report_month        | string | Month in MXX format           |
+        | orig_country        | string | Origin country code           |
+        | business            | string | Business unit                 |
+        | market_rate_impact  | float  | MTD market rate impact ($/km) |
+        | m2_distance_km      | float  | Compare period distance       |
+
+    Output Table:
+        | Column            | Type   | Description                          |
+        |-------------------|--------|--------------------------------------|
+        | report_year       | string | Year in R20XX format                 |
+        | report_month      | string | Month in MXX format                  |
+        | orig_country      | string | Origin country code                  |
+        | business (if by_business) | string | Business unit                 |
+        | op2_market_impact | float  | MTD - OP2 market impact delta (USD)  |
+    """
+    from .op2_helpers import get_market_rate_impact_from_mtd
+
+    # Step 1: Get MTD market rate impact
+    mtd_market_rate = get_market_rate_impact_from_mtd(final_bridge_df)
+
+    # Step 2: Calculate OP2 market impact using the existing formula
+    op2 = df_op2[df_op2["Bridge type"] == "monthly"].copy()
+
+    op2 = op2.rename(columns={
+        "Report Year": "report_year",
+        "Report Month": "report_month",
+        "Orig_EU5": "orig_country",
+        "Dest_EU5": "dest_country",
+        "Business Flow": "business",
+        "Distance Band": "distance_band",
+        "CpKM": "op2_cpkm",
+        "Market Rate": "op2_market_rate",
+    })
+
+    dim_cols = ["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"]
+
+    for col in dim_cols:
+        if col in op2.columns:
+            op2[col] = op2[col].astype(str)
+    op2["business"] = op2["business"].str.upper()
+
+    # Calculate market rate multiplier
+    op2["mr_by_cpkm"] = np.where(
+        op2["op2_cpkm"] > 0,
+        op2["op2_market_rate"].fillna(0) / op2["op2_cpkm"],
+        np.nan,
+    )
+    op2 = op2[dim_cols + ["mr_by_cpkm"]]
+
+    # Prepare actual data
+    actual = df.copy()
+    for col in dim_cols:
+        actual[col] = actual[col].astype(str)
+    actual["business"] = actual["business"].str.upper()
+    actual["distance_band"] = (
+        actual["distance_band"]
+        .str.strip()
+        .str.replace(r"^\d+\.", "", regex=True)
+    )
+
+    # Aggregate actual data
+    group_cols = ["report_year", "report_month", "orig_country", "dest_country", "distance_band", "business"]
+    actual_agg = actual.groupby(group_cols, as_index=False).agg(
+        distance=("distance_for_cpkm", "sum"),
+        cost=("total_cost_usd", "sum"),
+    )
+
+    actual_agg["cpkm"] = np.where(
+        actual_agg["distance"] > 0,
+        actual_agg["cost"] / actual_agg["distance"],
+        0.0,
+    )
+
+    # Build LY via self-join
+    actual_agg["year_num"] = actual_agg["report_year"].str.replace("R", "").astype(int)
+    actual_agg["ly_report_year"] = "R" + (actual_agg["year_num"] - 1).astype(str)
+
+    ly = actual_agg[group_cols + ["cpkm", "distance", "cost"]].rename(columns={
+        "cpkm": "ly_cpkm",
+        "distance": "ly_distance",
+        "cost": "ly_cost",
+    })
+
+    merged = actual_agg.merge(
+        ly,
+        left_on=["ly_report_year", "report_month", "orig_country", "dest_country", "distance_band", "business"],
+        right_on=["report_year", "report_month", "orig_country", "dest_country", "distance_band", "business"],
+        how="left",
+        suffixes=("", "_drop"),
+    )
+    merged = merged.drop(columns=[c for c in merged.columns if c.endswith("_drop")])
+
+    # Merge OP2 market rate signal
+    merged = merged.merge(op2, on=dim_cols, how="left")
+
+    # Apply OP2 market rate logic (absolute USD)
+    merged["op2_market_impact_raw"] = np.where(
+        merged["mr_by_cpkm"].notna(),
+        np.where(
+            merged["ly_distance"].fillna(0) == 0,
+            merged["cost"] * merged["mr_by_cpkm"] - merged["cost"],
+            merged["ly_cpkm"] * merged["distance"] * merged["mr_by_cpkm"],
+        ),
+        0.0,
+    )
+    merged["op2_market_impact_raw"] = merged["op2_market_impact_raw"].fillna(0.0)
+
+    # Step 3: Aggregate OP2 market impact to output grain
+    if by_business:
+        op2_agg = merged.groupby(
+            ["report_year", "report_month", "orig_country", "business"],
+            as_index=False,
+        ).agg(op2_market_impact_raw=("op2_market_impact_raw", "sum"))
+
+        # Step 4: Join with MTD market rate and calculate delta
+        out = op2_agg.merge(
+            mtd_market_rate[["report_year", "report_month", "orig_country", "business", "market_rate_impact"]],
+            on=["report_year", "report_month", "orig_country", "business"],
+            how="left",
+        )
+
+        out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
+        return out[["report_year", "report_month", "orig_country", "business", "op2_market_impact"]]
+    else:
+        op2_agg = merged.groupby(
+            ["report_year", "report_month", "orig_country"],
+            as_index=False,
+        ).agg(op2_market_impact_raw=("op2_market_impact_raw", "sum"))
+
+        # Aggregate MTD market rate to country level
+        mtd_country = mtd_market_rate.groupby(
+            ["report_year", "report_month", "orig_country"],
+            as_index=False,
+        ).agg(market_rate_impact=("market_rate_impact", "sum"))
+
+        out = op2_agg.merge(
+            mtd_country,
+            on=["report_year", "report_month", "orig_country"],
+            how="left",
+        )
+
+        out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
+        return out[["report_year", "report_month", "orig_country", "op2_market_impact"]]
