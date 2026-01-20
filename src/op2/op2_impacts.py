@@ -511,14 +511,14 @@ def calculate_op2_tech_impact_monthly(
     # Calculate OP2 tech impact value
     op2["op2_tech_impact_value"] = op2["op2_distance"] * op2["op2_tech_impact"].fillna(0)
 
-    # Prepare actual data
+    # Prepare actual data - keep report_week to lookup correct tech rate for each week
     actual = df.groupby(
-        ["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"],
+        ["report_year", "report_month", "report_week", "orig_country", "dest_country", "business", "distance_band"],
         as_index=False,
     ).agg(actual_cost=("total_cost_usd", "sum"))
 
     # Normalize types
-    for col in ["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"]:
+    for col in ["report_year", "report_month", "report_week", "orig_country", "dest_country", "business", "distance_band"]:
         actual[col] = actual[col].astype(str)
     actual["business"] = actual["business"].str.upper()
     actual["distance_band"] = (
@@ -527,16 +527,23 @@ def calculate_op2_tech_impact_monthly(
         .str.replace(r"^\d+\.", "", regex=True)
     )
 
-    # Calculate tech rate for actual data (use month midpoint week approximation)
+    # Calculate tech rate using actual week from data
     def _get_rate(row):
-        month_num = int(row["report_month"].replace("M", ""))
+        week_num = int(row["report_week"].replace("W", ""))
         year_num = int(row["report_year"].replace("R", ""))
-        # Approximate week from month (month * 4.33)
-        week_num = int(month_num * 4.33)
         return get_tech_savings_rate(year_num, week_num)
 
     actual["tech_rate"] = actual.apply(_get_rate, axis=1)
     actual["TY_tech_impact"] = actual["actual_cost"] * actual["tech_rate"]
+
+    # Aggregate to month level after calculating week-level tech impacts
+    actual = actual.groupby(
+        ["report_year", "report_month", "orig_country", "dest_country", "business", "distance_band"],
+        as_index=False,
+    ).agg(
+        actual_cost=("actual_cost", "sum"),
+        TY_tech_impact=("TY_tech_impact", "sum"),
+    )
 
     # Join OP2 tech impact
     merged = actual.merge(
