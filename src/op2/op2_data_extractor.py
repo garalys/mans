@@ -286,6 +286,72 @@ def extract_op2_monthly_base_by_business(df_op2: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def extract_op2_monthly_detailed_by_business(df_op2: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract OP2 monthly detailed metrics by business from 'monthly' bridge type.
+
+    This is the detailed monthly data used for aggregating to quarterly business level.
+
+    Input Table - df_op2 (raw OP2 data):
+        | Column          | Type   | Description                     |
+        |-----------------|--------|---------------------------------|
+        | Bridge type     | string | Must be 'monthly'               |
+        | Report Year     | string | Year in R20XX format            |
+        | Report Month    | string | Month in MXX format             |
+        | Orig_EU5        | string | Origin country code             |
+        | Business Flow   | string | Business unit identifier        |
+        | Distance        | float  | Distance in kilometers          |
+        | Cost            | float  | Total cost                      |
+        | Loads           | int    | Number of loads                 |
+
+    Output Table:
+        | Column            | Type   | Description                   |
+        |-------------------|--------|-------------------------------|
+        | report_year       | string | Year in R20XX format          |
+        | report_month      | string | Month in MXX format           |
+        | orig_country      | string | Origin country code           |
+        | business          | string | Business unit (uppercase)     |
+        | op2_base_distance | float  | OP2 baseline distance         |
+        | op2_base_cost     | float  | OP2 baseline cost             |
+        | op2_base_loads    | int    | OP2 baseline loads            |
+        | op2_base_cpkm     | float  | OP2 baseline CPKM             |
+    """
+    # Filter OP2 monthly detailed data (Bridge type == 'monthly')
+    op2 = df_op2[df_op2["Bridge type"] == "monthly"].copy()
+
+    op2 = op2.rename(columns={
+        "Report Year": "report_year",
+        "Report Month": "report_month",
+        "Orig_EU5": "orig_country",
+        "Dest_EU5": "dest_country",
+        "Business Flow": "business",
+        "Distance Band": "distance_band",
+        "Distance": "op2_distance",
+        "Cost": "op2_cost",
+        "Loads": "op2_loads",
+    })
+
+    # Normalize types
+    op2["report_year"] = op2["report_year"].astype(str)
+    op2["report_month"] = op2["report_month"].astype(str)
+    op2["orig_country"] = op2["orig_country"].astype(str)
+    op2["business"] = op2["business"].astype(str).str.upper()
+
+    # Aggregate to business level
+    out = op2.groupby(
+        ["report_year", "report_month", "orig_country", "business"],
+        as_index=False,
+    ).agg(
+        op2_base_distance=("op2_distance", "sum"),
+        op2_base_cost=("op2_cost", "sum"),
+        op2_base_loads=("op2_loads", "sum"),
+    )
+
+    out["op2_base_cpkm"] = out["op2_base_cost"] / out["op2_base_distance"]
+
+    return out
+
+
 def extract_op2_quarterly_base_cpkm(df_op2: pd.DataFrame) -> pd.DataFrame:
     """
     Extract OP2 base quarterly CPKM from monthly_agg bridge type.

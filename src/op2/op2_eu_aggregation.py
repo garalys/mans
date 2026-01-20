@@ -1333,7 +1333,7 @@ def create_op2_eu_quarterly_business_bridge(
     Output Table:
         Same structure but with business dimension
     """
-    from .op2_data_extractor import extract_op2_monthly_base_by_business, extract_op2_quarterly_base_cpkm
+    from .op2_data_extractor import extract_op2_monthly_detailed_by_business, extract_op2_quarterly_base_cpkm
 
     logger.info("Creating OP2 EU x business quarterly bridge...")
 
@@ -1371,8 +1371,8 @@ def create_op2_eu_quarterly_business_bridge(
 
     actual_eu["compare_cpkm"] = actual_eu["actual_cost"] / actual_eu["actual_distance_km"]
 
-    # Get OP2 base from monthly business data across EU countries and aggregate to quarterly
-    monthly_base = extract_op2_monthly_base_by_business(df_op2)
+    # Get OP2 base from monthly detailed data (Bridge type == 'monthly') across EU countries
+    monthly_base = extract_op2_monthly_detailed_by_business(df_op2)
     monthly_base = monthly_base[monthly_base["orig_country"].isin(eu_countries)]
     monthly_base["report_quarter"] = monthly_base["report_month"].apply(_get_quarter_from_month)
     monthly_base["business"] = monthly_base["business"].str.upper()
