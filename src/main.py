@@ -37,11 +37,13 @@ from .bridges.total_aggregation import calculate_total_aggregated_metrics
 from .bridges.impact_adjuster import adjust_carrier_demand_impacts
 from .op2.op2_weekly_bridge import create_op2_weekly_bridge, create_op2_weekly_country_business_bridge
 from .op2.op2_monthly_bridge import create_op2_monthly_bridge, create_op2_monthly_country_business_bridge
+from .op2.op2_quarterly_bridge import create_op2_quarterly_bridge
 from .op2.op2_eu_aggregation import (
     create_op2_eu_weekly_bridge,
     create_op2_eu_weekly_business_bridge,
     create_op2_eu_monthly_bridge,
     create_op2_eu_monthly_business_bridge,
+    create_op2_eu_quarterly_bridge,
 )
 from .op2.op2_impact_adjuster import adjust_op2_carrier_demand_impacts
 from .utils.date_utils import extract_year_from_report_year
@@ -278,6 +280,35 @@ def run_analytics_pipeline(
     logger.info(f"OP2 EU-BUSINESS monthly rows: {len(op2_eu_monthly_business_df)}")
     final_bridge_df = pd.concat([final_bridge_df, op2_eu_monthly_business_df], ignore_index=True)
     logger.info(f"OP2 EU-BUSINESS monthly creation took: {time.time() - start_time:.2f} seconds")
+
+    # Step 13: Create OP2 quarterly bridges (country + EU level only)
+    logger.info("Creating OP2 quarterly COUNTRY-TOTAL bridge...")
+    start_time = time.time()
+
+    op2_quarterly_country_df = create_op2_quarterly_bridge(
+        df=df,
+        df_op2=df_op2,
+        df_carrier=df_carrier,
+        final_bridge_df=final_bridge_df,
+    )
+
+    logger.info(f"OP2 quarterly COUNTRY-TOTAL rows: {len(op2_quarterly_country_df)}")
+    final_bridge_df = pd.concat([final_bridge_df, op2_quarterly_country_df], ignore_index=True)
+    logger.info(f"OP2 quarterly COUNTRY-TOTAL creation took: {time.time() - start_time:.2f} seconds")
+
+    logger.info("Creating OP2 EU-TOTAL quarterly bridge...")
+    start_time = time.time()
+
+    op2_eu_quarterly_df = create_op2_eu_quarterly_bridge(
+        df=df,
+        df_op2=df_op2,
+        df_carrier=df_carrier,
+        final_bridge_df=final_bridge_df,
+    )
+
+    logger.info(f"OP2 EU-TOTAL quarterly rows: {len(op2_eu_quarterly_df)}")
+    final_bridge_df = pd.concat([final_bridge_df, op2_eu_quarterly_df], ignore_index=True)
+    logger.info(f"OP2 EU-TOTAL quarterly creation took: {time.time() - start_time:.2f} seconds")
 
     # Adjust OP2 impacts
     final_bridge_df = adjust_op2_carrier_demand_impacts(final_bridge_df)
