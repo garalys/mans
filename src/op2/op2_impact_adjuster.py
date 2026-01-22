@@ -44,7 +44,7 @@ def adjust_op2_carrier_demand_impacts(bridge_df: pd.DataFrame) -> pd.DataFrame:
     """
     logger.info("Adjusting OP2 carrier & demand impacts (reconciling)...")
 
-    mask_op2 = bridge_df["bridge_type"] == "op2_weekly"
+    mask_op2 = bridge_df["bridge_type"].isin(["op2_weekly", "op2_monthly", "op2_quarterly"])
 
     # Calculate expected CPKM
     bridge_df.loc[mask_op2, "expected_cpkm"] = bridge_df.loc[mask_op2].apply(
