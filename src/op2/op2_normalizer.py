@@ -119,7 +119,8 @@ def compute_op2_normalized_cpkm_weekly(
             norm_distance=("actual_distance", "sum"),  # Renamed to avoid conflicts
         )
         out["op2_normalized_cpkm"] = out["op2_normalized_cost"] / out["norm_distance"]
-        logger.info(f"sum op2 norm: {out['op2_normalized_cpkm'].sum()}")
+        logger.info(out[[ "report_week", "orig_country", "business", "op2_normalized_cost","norm_distance"]].head())
+        logger.info(f"sum op2 norm: {out['op2_normalized_cost'].sum()}")
         # Explicitly select and copy to avoid any column leakage
         result = out[["report_year", "report_week", "orig_country", "business", "op2_normalized_cost", "op2_normalized_cpkm"]].copy()
         logger.info(f"op2_norm returning columns: {result.columns.tolist()}")

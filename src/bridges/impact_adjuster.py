@@ -8,8 +8,6 @@ and calculates impacts in millions USD.
 import pandas as pd
 import numpy as np
 
-from ..utils.date_utils import extract_year_from_report_year
-
 
 def adjust_carrier_demand_impacts(bridge_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -150,20 +148,7 @@ def _get_distance_for_row(row: pd.Series) -> float:
     elif pd.notnull(row.get("m2_distance_km")):
         distance = row["m2_distance_km"]
     # For YoY, extract compare year from bridging_value
-    elif row.get("bridge_type") == "YoY" and pd.notnull(row.get("bridging_value")):
-        try:
-            compare_year_str = row["bridging_value"].split("_to_")[1]
-            compare_year_num = extract_year_from_report_year(compare_year_str)
-            distance_col = f"y{compare_year_num}_distance_km"
-            if distance_col in row.index and pd.notnull(row[distance_col]):
-                distance = row[distance_col]
-        except (IndexError, ValueError):
-            # Fallback if parsing fails
-            if pd.notnull(row.get("compare_distance_km")):
-                distance = row["compare_distance_km"]
-    else:
-        # Fallback for any other cases
-        if pd.notnull(row.get("compare_distance_km")):
-            distance = row["compare_distance_km"]
+    elif pd.notnull(row.get("compare_distance_km")):
+        distance = row["compare_distance_km"]
 
     return distance

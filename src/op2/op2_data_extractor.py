@@ -241,7 +241,7 @@ def extract_op2_monthly_base_by_business(df_op2: pd.DataFrame) -> pd.DataFrame:
         | op2_carriers      | int    | OP2 active carriers           |
     """
     # Filter OP2 monthly detailed data
-    op2 = df_op2[df_op2["Bridge type"] == "monthly_bridge"].copy()
+    op2 = df_op2[df_op2["Bridge type"] == "monthly"].copy()
 
     op2 = op2.rename(columns={
         "Report Year": "report_year",
