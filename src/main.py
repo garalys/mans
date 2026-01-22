@@ -99,11 +99,12 @@ def run_analytics_pipeline(
     )
 
     # Filter to relevant years and weeks (configurable)
-    df = df[df["report_year"].isin(["R2025", "R2026"])]
-    df = df[df["report_week"].isin(["W01", "W02", "W03", "W04", "W05"])]
+    #df = df[df["report_year"].isin(["R2025", "R2026"])]
+    #df = df[df["report_week"].isin(["W01", "W02", "W03", "W04", "W05"])]
 
     # Clean carrier data
     df_carrier.columns = df_carrier.columns.str.strip()
+    df_op2.columns = df_op2.columns.str.strip()
     df_carrier["percentage"] = pd.to_numeric(df_carrier["percentage"], errors="coerce")
 
     logger.info(f"DataFrame columns: {df.columns.tolist()}")

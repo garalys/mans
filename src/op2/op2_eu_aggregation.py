@@ -185,7 +185,6 @@ def create_op2_eu_weekly_bridge(
     )
 
     bridge["bridging_value"] = bridge["report_year"] + "_" + bridge["report_week"] + "_OP2"
-    bridge["w2_distance_km"] = bridge["actual_distance_km"]
     bridge["benchmark_gap"] = bridge["compare_cpkm"] - bridge["op2_base_cpkm"]
 
     # Calculate carrier and demand impacts using EU coefficients

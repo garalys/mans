@@ -245,9 +245,7 @@ def _update_bridge_with_eu_metrics(
 
     # Determine prefix mapping based on period type
     if period_type == "YoY":
-        base_year = extract_year_from_report_year(base_data["report_year"].iloc[0])
-        compare_year_num = extract_year_from_report_year(compare_data["report_year"].iloc[0])
-        prefix_map = {"base": f"y{base_year}_", "compare": f"y{compare_year_num}_"}
+        prefix_map = {"base": f"base_", "compare": f"compare_"}
     elif period_type == "WoW":
         prefix_map = {"base": "w1_", "compare": "w2_"}
     else:  # MTD
@@ -385,10 +383,34 @@ def _calculate_eu_impacts(
         impact_updates["demand_impact"] = demand_impact
 
     # Tech impact
-    if time_period and time_period.startswith("W"):
-        compare_year_num = compare_year if isinstance(compare_year, int) else extract_year_from_report_year(str(compare_year))
-        week_num = int(time_period.replace("W", ""))
-        tech_rate = get_tech_savings_rate(compare_year_num, week_num)
-        impact_updates["tech_impact"] = metrics["cpkm"] * tech_rate
+    if time_period:
+        compare_year_num = (
+            compare_year
+            if isinstance(compare_year, int)
+            else extract_year_from_report_year(str(compare_year))
+        )
 
+        # WEEKLY (EU WoW / YoY)
+        if time_period.startswith("W"):
+            week_num = int(time_period.replace("W", ""))
+            tech_rate = get_tech_savings_rate(compare_year_num, week_num)
+            impact_updates["tech_impact"] = metrics["cpkm"] * tech_rate
+
+        # MTD (EU MTD → first week of the month)
+        elif time_period.startswith("M"):
+            df = business_data["compare"]
+
+            if not df.empty:
+                first_week = (
+                    df["report_week"]
+                    .astype(str)
+                    .sort_values()
+                    .iloc[0]
+                )
+                week_num = int(first_week.replace("W", ""))
+                tech_rate = get_tech_savings_rate(compare_year_num, week_num)
+                impact_updates["tech_impact"] = metrics["cpkm"] * tech_rate
+            else:
+                impact_updates["tech_impact"] = 0.0
+                
     return impact_updates

@@ -267,9 +267,7 @@ def _update_bridge_with_total_metrics(
     """Update bridge DataFrame with total aggregated metrics."""
     # Determine prefix mapping
     if period_type == "YoY":
-        base_year = extract_year_from_report_year(base_data["report_year"].iloc[0])
-        compare_year_num = extract_year_from_report_year(compare_data["report_year"].iloc[0])
-        prefix_map = {"base": f"y{base_year}_", "compare": f"y{compare_year_num}_"}
+        prefix_map = {"base": "base_", "compare": "compare_"}
         if time_period is None:
             time_period = bridge_df.loc[idx, "report_week"]
     elif period_type == "WoW":
@@ -374,10 +372,28 @@ def _update_bridge_with_total_metrics(
             bridge_df.loc[idx, ["carrier_impact", "demand_impact"]] = [carrier_impact, demand_impact]
 
         # Tech impact
-        if period_type in ["YoY", "WoW"] and time_period and time_period.startswith("W"):
-            try:
+        try:
+            # YoY / WoW → use explicit week
+            if period_type in ["YoY", "WoW"] and time_period and time_period.startswith("W"):
                 week_num = int(time_period.replace("W", ""))
                 tech_rate = get_tech_savings_rate(compare_year, week_num)
                 bridge_df.loc[idx, "tech_impact"] = metrics["cpkm"] * tech_rate
-            except (ValueError, TypeError):
-                bridge_df.loc[idx, "tech_impact"] = 0
+
+            # MTD → pick FIRST week of the month
+            elif period_type == "MTD" and time_period and time_period.startswith("M"):
+                if not compare_data.empty:
+                    first_week = (
+                        compare_data["report_week"]
+                        .astype(str)
+                        .sort_values()
+                        .iloc[0]
+                    )
+                    week_num = int(first_week.replace("W", ""))
+                    tech_rate = get_tech_savings_rate(compare_year, week_num)
+                    bridge_df.loc[idx, "tech_impact"] = metrics["cpkm"] * tech_rate
+                else:
+                    bridge_df.loc[idx, "tech_impact"] = 0.0
+
+        except (ValueError, TypeError, IndexError):
+            bridge_df.loc[idx, "tech_impact"] = 0.0
+

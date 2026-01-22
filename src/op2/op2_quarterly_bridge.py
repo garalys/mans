@@ -2,7 +2,7 @@
 OP2 Quarterly Bridge Builder
 
 Creates quarterly benchmark bridges comparing actual performance to OP2 targets.
-Quarterly data available at Country and EU level only (not at business level).
+Quarterly data available at Country and EU Total and Business level.
 """
 
 import pandas as pd

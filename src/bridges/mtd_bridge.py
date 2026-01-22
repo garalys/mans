@@ -145,19 +145,17 @@ def _update_mtd_metrics(
         "base_costs_usd": "m1_costs_usd",
         "base_loads": "m1_loads",
         "base_carriers": "m1_carriers",
-        "base_cpkm": "m1_cpkm",
+        "base_cpkm": "base_cpkm",
+        "compare_distance_km": "m2_distance_km",
+        "compare_costs_usd": "m2_costs_usd",
+        "compare_loads": "m2_loads",
+        "compare_carriers": "m2_carriers",
+        "compare_cpkm": "compare_cpkm",
     }
 
     for old_key, new_key in metrics_mapping.items():
         if old_key in metrics:
             bridge_df.loc[idx, new_key] = metrics[old_key]
-
-    # Update m2 (comparison) metrics
-    bridge_df.loc[idx, "m2_distance_km"] = metrics.get("compare_distance_km")
-    bridge_df.loc[idx, "m2_costs_usd"] = metrics.get("compare_costs_usd")
-    bridge_df.loc[idx, "m2_loads"] = metrics.get("compare_loads")
-    bridge_df.loc[idx, "m2_carriers"] = metrics.get("compare_carriers")
-    bridge_df.loc[idx, "m2_cpkm"] = metrics.get("compare_cpkm")
 
     # Update bridge components
     for metric, value in metrics.items():
