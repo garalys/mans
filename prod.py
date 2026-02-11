@@ -42,16 +42,41 @@ def _style_table(table, fontsize=10):
             cell.set_facecolor(TABLE_ROW_EVEN if row % 2 == 0 else TABLE_ROW_ODD)
 
 
-def _render_table_page(pdf, tbl_data, col_labels, title, fontsize=8, figwidth=28, row_height=0.55):
-    fig, ax = plt.subplots(figsize=(figwidth, 3 + len(tbl_data) * row_height))
+def _render_table_page(pdf, tbl_data, col_labels, title, fontsize=9, figwidth=28,
+                       row_height=0.65, risk_col=None, totals_row=None):
+    all_rows = list(tbl_data)
+    if totals_row:
+        all_rows.append(totals_row)
+    fig, ax = plt.subplots(figsize=(figwidth, 3.5 + len(all_rows) * row_height))
     ax.axis("off")
-    ax.set_title(title, fontsize=16, fontweight="bold", pad=20)
+    ax.set_title(title, fontsize=18, fontweight="bold", pad=24)
     table = ax.table(
-        cellText=tbl_data, colLabels=col_labels,
+        cellText=all_rows, colLabels=col_labels,
         cellLoc="center", loc="center",
     )
     _style_table(table, fontsize=fontsize)
-    table.scale(1, 1.6)
+    table.scale(1, 1.8)
+    n_cols = len(col_labels)
+    # Color risk column (HIGH=red, MOD=yellow, LOW=green)
+    if risk_col is not None:
+        for ri in range(1, len(all_rows) + 1):
+            rv = all_rows[ri - 1][risk_col]
+            cell = table[ri, risk_col]
+            if rv == "HIGH":
+                cell.set_facecolor("#FF6B6B")
+                cell.set_text_props(color="white", fontweight="bold")
+            elif rv == "MOD":
+                cell.set_facecolor("#FFD93D")
+                cell.set_text_props(fontweight="bold")
+            elif rv == "LOW":
+                cell.set_facecolor("#6BCB77")
+                cell.set_text_props(fontweight="bold")
+    # Style totals row
+    if totals_row:
+        tr = len(all_rows)
+        for ci in range(n_cols):
+            table[tr, ci].set_text_props(fontweight="bold")
+            table[tr, ci].set_facecolor("#D6E4F0")
     plt.tight_layout()
     pdf.savefig(fig, bbox_inches="tight")
     plt.close()
@@ -177,12 +202,25 @@ class MonthlyReportGenerator:
                 f"{np.percentile(vals,25):.4f}", f"{np.percentile(vals,75):.4f}",
                 f"{vals.std():.4f}", f"{avg_hhi:.3f}",
             ])
+        all_vals = df["cpkm"].dropna()
+        all_loads = int(df["executed_load"].sum())
+        all_carriers = df["vehicle_carrier"].nunique()
+        all_hhi = hhi_df["hhi"].mean() if len(hhi_df) > 0 else 0
+        totals = [
+            "TOTAL", all_loads, "100%", f"{df['total_cost'].sum():,.0f}",
+            f"{df['cubes'].sum():,.0f}", df["route"].nunique(), all_carriers,
+            f"{all_loads/all_carriers:.1f}" if all_carriers else "-",
+            f"{all_vals.mean():.4f}", f"{all_vals.median():.4f}",
+            f"{np.percentile(all_vals,2.5):.4f}", f"{np.percentile(all_vals,97.5):.4f}",
+            f"{np.percentile(all_vals,25):.4f}", f"{np.percentile(all_vals,75):.4f}",
+            f"{all_vals.std():.4f}", f"{all_hhi:.3f}",
+        ]
         _render_table_page(
             pdf, rows,
-            ["Supply Type","Loads","Load Share","Total Cost","Volume m3","Routes","Carriers",
-             "LCR","Mean CPKM","Median CPKM","P2.5","P97.5","P25","P75","Std","Avg HHI"],
+            ["Supply Type","Loads","Share","Cost","Volume","Routes","Carriers",
+             "LCR","Mean","Median","P2.5","P97.5","P25","P75","Std","Avg HHI"],
             f"Supply Type Overview  -  {year} {month}",
-            fontsize=9, figwidth=28,
+            fontsize=10, figwidth=28, totals_row=totals,
         )
 
     # --------------------------------------------------------------------------
@@ -236,7 +274,7 @@ class MonthlyReportGenerator:
         tbl_data = []
         for _, r in top.iterrows():
             tbl_data.append([
-                r.route, f"{r.orig} -> {r.dest}",
+                r.route, f"{r.orig}->{r.dest}",
                 f"{r.total_cost:,.0f}", f"{r.total_cubes:,.0f}",
                 int(r.total_loads), int(r.n_carriers), f"{r.lcr:.1f}",
                 f"{r.mean_cpkm:.3f}", f"{r.median_cpkm:.3f}",
@@ -244,13 +282,25 @@ class MonthlyReportGenerator:
                 int(r.get("1.AZNG", 0)), int(r.get("2.RLB", 0)), int(r.get("3.3P", 0)),
                 f"{r.hhi:.3f}", _hhi_risk(r.hhi),
             ])
+        totals = [
+            "TOTAL", "",
+            f"{top.total_cost.sum():,.0f}", f"{top.total_cubes.sum():,.0f}",
+            int(top.total_loads.sum()), "", "",
+            "", "",
+            int(top.out_loads.sum()), f"{top.out_cubes.sum():,.0f}",
+            f"{top.out_cost_over_mad.sum():,.0f}",
+            int(top[[c for c in ["1.AZNG"] if c in top.columns]].sum().sum()) if "1.AZNG" in top.columns else 0,
+            int(top[[c for c in ["2.RLB"] if c in top.columns]].sum().sum()) if "2.RLB" in top.columns else 0,
+            int(top[[c for c in ["3.3P"] if c in top.columns]].sum().sum()) if "3.3P" in top.columns else 0,
+            "", "",
+        ]
         _render_table_page(
             pdf, tbl_data,
             ["Route", "Lane", "Cost", "Volume", "Loads", "Carriers", "LCR",
-             "Mean", "Median", "Out Loads", "Out Vol", "MAD Cost",
-             "AZNG Out", "RLB Out", "3P Out", "HHI", "Risk"],
+             "Mean", "Median", "Out Lds", "Out Vol", "MAD Cost",
+             "AZNG", "RLB", "3P", "HHI", "Risk"],
             f"Overall Outlier Summary - Top {top_n} by MAD Over Cost  -  {year} {month}",
-            fontsize=7, figwidth=30,
+            fontsize=9, figwidth=30, risk_col=16, totals_row=totals,
         )
 
     # --------------------------------------------------------------------------
@@ -283,10 +333,12 @@ class MonthlyReportGenerator:
             for lane, row in pivot.iterrows():
                 tbl_data.append([lane] + [fmt(row[c]) for c in pivot.columns])
 
+            col_totals = pivot.sum()
+            totals = ["TOTAL"] + [fmt(col_totals[c]) for c in pivot.columns]
             _render_table_page(
                 pdf, tbl_data, ["Lane"] + list(pivot.columns),
                 f"{label} by Lane x Distance Band  -  {year} {month}",
-                fontsize=8, figwidth=24,
+                fontsize=10, figwidth=24, totals_row=totals,
             )
 
     # --------------------------------------------------------------------------
@@ -342,7 +394,7 @@ class MonthlyReportGenerator:
                 tbl_data = []
                 for _, r in top.iterrows():
                     tbl_data.append([
-                        r.route, f"{r.orig} -> {r.dest}",
+                        r.route, f"{r.orig}->{r.dest}",
                         f"{r.total_cost:,.0f}", f"{r.total_cubes:,.0f}",
                         int(r.total_loads), int(r.n_carriers), f"{r.lcr:.1f}",
                         f"{r.mean_cpkm:.3f}", f"{r.median_cpkm:.3f}",
@@ -350,13 +402,24 @@ class MonthlyReportGenerator:
                         int(r.get("1.AZNG", 0)), int(r.get("2.RLB", 0)), int(r.get("3.3P", 0)),
                         f"{r.hhi:.3f}", _hhi_risk(r.hhi),
                     ])
+                totals = [
+                    "TOTAL", "",
+                    f"{top.total_cost.sum():,.0f}", f"{top.total_cubes.sum():,.0f}",
+                    int(top.total_loads.sum()), "", "",
+                    "", "",
+                    int(top.out_loads.sum()), f"{top.out_cost_over_mad.sum():,.0f}",
+                    int(top.get("1.AZNG", pd.Series([0])).sum()),
+                    int(top.get("2.RLB", pd.Series([0])).sum()),
+                    int(top.get("3.3P", pd.Series([0])).sum()),
+                    "", "",
+                ]
                 _render_table_page(
                     pdf, tbl_data,
                     ["Route", "Lane", "Cost", "Volume", "Loads", "Carriers", "LCR",
-                     "Mean", "Median", "Out Loads", "MAD Cost",
-                     "AZNG Out", "RLB Out", "3P Out", "HHI", "Risk"],
+                     "Mean", "Median", "Out Lds", "MAD Cost",
+                     "AZNG", "RLB", "3P", "HHI", "Risk"],
                     f"{country} - Top {top_n} Routes by {label}  -  {year} {month}",
-                    fontsize=7, figwidth=28,
+                    fontsize=9, figwidth=28, risk_col=15, totals_row=totals,
                 )
 
     # --------------------------------------------------------------------------
@@ -376,60 +439,31 @@ class MonthlyReportGenerator:
             ).reset_index()
         )
         route_stats["lcr"] = route_stats["total_loads"] / route_stats["n_carriers"]
-        route_supply = (
-            df.groupby(["route", "supply_type"]).agg(
-                st_cost=("total_cost", "sum"), st_cubes=("cubes", "sum"),
-                st_loads=("executed_load", "sum"), st_carriers=("vehicle_carrier", "nunique"),
-                st_mean=("cpkm", "mean"), st_median=("cpkm", "median"),
-            ).reset_index()
-        )
         hhi = hhi.merge(route_stats, on="route")
         hhi = hhi[hhi["total_loads"] >= 5].copy()
 
-        # Tables
         def _build_table(sort_col, label):
             top = hhi.sort_values(sort_col, ascending=False).head(top_n)
             tbl_data = []
             for _, r in top.iterrows():
-                rs = route_supply[route_supply["route"] == r.route]
-                parts = []
-                for _, s in rs.iterrows():
-                    slcr = s.st_loads / s.st_carriers if s.st_carriers > 0 else 0
-                    parts.append(
-                        f"{s.supply_type}: C={s.st_cost:,.0f} V={s.st_cubes:,.0f} "
-                        f"L={int(s.st_loads)} LCR={slcr:.1f} u={s.st_mean:.3f} m={s.st_median:.3f}"
-                    )
                 tbl_data.append([
                     r.route, f"{r.total_cost:,.0f}", f"{r.total_cubes:,.0f}",
                     int(r.total_loads), int(r.n_carriers), f"{r.lcr:.1f}",
                     f"{r.mean_cpkm:.3f}", f"{r.median_cpkm:.3f}",
-                    f"{r.hhi:.3f}", _hhi_risk(r.hhi), " | ".join(parts),
+                    f"{r.hhi:.3f}", _hhi_risk(r.hhi),
                 ])
-            fig, ax = plt.subplots(figsize=(28, 3 + len(tbl_data) * 0.6))
-            ax.axis("off")
-            ax.set_title(f"HHI - Top {top_n} by {label}  -  {year} {month}",
-                         fontsize=16, fontweight="bold", pad=20)
-            table = ax.table(
-                cellText=tbl_data,
-                colLabels=["Route","Cost","Volume","Loads","Carriers","LCR",
-                           "Mean","Median","HHI","Risk","Supply Type Breakdown"],
-                cellLoc="center", loc="center",
+            totals = [
+                "TOTAL", f"{top.total_cost.sum():,.0f}", f"{top.total_cubes.sum():,.0f}",
+                int(top.total_loads.sum()), "", "",
+                "", "", "", "",
+            ]
+            _render_table_page(
+                pdf, tbl_data,
+                ["Route", "Cost", "Volume", "Loads", "Carriers", "LCR",
+                 "Mean", "Median", "HHI", "Risk"],
+                f"HHI - Top {top_n} by {label}  -  {year} {month}",
+                fontsize=10, figwidth=24, risk_col=9, totals_row=totals,
             )
-            _style_table(table, fontsize=8)
-            table.scale(1, 1.6)
-            for ri in range(len(tbl_data) + 1):
-                table[ri, 10].set_text_props(fontsize=7, ha="left")
-            for ri in range(1, len(tbl_data) + 1):
-                rv = tbl_data[ri - 1][9]
-                cell = table[ri, 9]
-                if rv == "HIGH":
-                    cell.set_facecolor("#FF6B6B")
-                    cell.set_text_props(color="white", fontweight="bold")
-                elif rv == "MOD":
-                    cell.set_facecolor("#FFD93D")
-            plt.tight_layout()
-            pdf.savefig(fig, bbox_inches="tight")
-            plt.close()
 
         _build_table("total_cost", "Cost")
         _build_table("total_cubes", "Volume")
