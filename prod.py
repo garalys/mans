@@ -661,7 +661,7 @@ class MonthlyReportGenerator:
             hhi_color = "#FF6B6B" if risk == "HIGH" else "#FFD93D" if risk == "MOD" else "#6BCB77"
 
             fig = plt.figure(figsize=(24, 18))
-            gs = fig.add_gridspec(2, 1, height_ratios=[3, 2.5])
+            gs = fig.add_gridspec(2, 1, height_ratios=[2, 2.5])
 
             ax_plot = fig.add_subplot(gs[0])
             ax_tables = fig.add_subplot(gs[1])
@@ -706,9 +706,12 @@ class MonthlyReportGenerator:
                 ["MAD", f"{mad:.3f}"], ["Threshold", f"{mad_threshold:.3f}"],
                 ["HHI", f"{route_hhi:.3f} ({risk})"],
             ]
+            # Fixed positions: both tables top-aligned at y=0.98, left=summary, right=outliers
+            tbl_top = 0.98
+            tbl_h_summary = 0.55
             s_tbl = ax_tables.table(
                 cellText=summary, colLabels=["Metric", "Value"],
-                cellLoc="center", bbox=[0.00, 0.50, 0.40, 0.48],
+                cellLoc="center", bbox=[0.00, tbl_top - tbl_h_summary, 0.38, tbl_h_summary],
             )
             _style_table(s_tbl, fontsize=10)
             s_tbl.scale(1, 1.4)
@@ -721,7 +724,7 @@ class MonthlyReportGenerator:
                 if risk == "HIGH":
                     s_tbl[hhi_row_idx, ci].set_text_props(color="white", fontweight="bold")
 
-            # Outlier detail table (ALL outliers)
+            # Outlier detail table - fixed top position, grows downward
             grp_col = "is_set" if hue_column == "vehicle_carrier" else hue_column
             if not outliers.empty:
                 ot = (
@@ -741,12 +744,12 @@ class MonthlyReportGenerator:
                     for (c, s), r in ot.iterrows()
                 ]
                 no = len(orows)
-                th = min(0.50, 0.05 + no * 0.04)
+                tbl_h_outlier = min(0.90, 0.04 * (no + 1) + 0.04)
                 o_tbl = ax_tables.table(
                     cellText=orows,
                     colLabels=["Carrier", grp_col, "Loads", "AvgMAD", "MaxMAD",
                                "Cost", "Dist", "OverMAD", "CPKM", "CPKMOver"],
-                    cellLoc="center", bbox=[0.43, max(0.0, 0.50 - th), 0.57, th + 0.05],
+                    cellLoc="center", bbox=[0.40, tbl_top - tbl_h_outlier, 0.60, tbl_h_outlier],
                 )
                 _style_table(o_tbl, fontsize=8)
                 o_tbl.scale(1, 1.2)
