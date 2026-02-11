@@ -403,9 +403,9 @@ class MonthlyReportGenerator:
             if len(st_present) > 0:
                 sns.boxplot(
                     data=df_r, x="supply_type", y="cpkm",
-                    palette=color_map, ax=ax_box,
+                    hue="supply_type", palette=color_map, ax=ax_box,
                     showfliers=True, fliersize=3,
-                    order=st_present,
+                    order=st_present, legend=False,
                 )
             ax_box.set_title("CPKM Box Plot by Supply Type", fontsize=13, fontweight="bold")
             ax_box.set_xlabel("Supply Type", fontsize=11)
