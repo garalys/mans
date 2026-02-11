@@ -660,14 +660,12 @@ class MonthlyReportGenerator:
             risk = _hhi_risk(route_hhi)
             hhi_color = "#FF6B6B" if risk == "HIGH" else "#FFD93D" if risk == "MOD" else "#6BCB77"
 
-            fig = plt.figure(figsize=(24, 24))
-            gs = fig.add_gridspec(3, 1, height_ratios=[3, 2.5, 2])
+            fig = plt.figure(figsize=(24, 18))
+            gs = fig.add_gridspec(2, 1, height_ratios=[3, 2.5])
 
             ax_plot = fig.add_subplot(gs[0])
             ax_tables = fig.add_subplot(gs[1])
             ax_tables.axis("off")
-            ax_conc = fig.add_subplot(gs[2])
-            ax_conc.axis("off")
 
             fig.suptitle(
                 f"{title_suffix}\n{route} | "
@@ -752,53 +750,6 @@ class MonthlyReportGenerator:
                 )
                 _style_table(o_tbl, fontsize=8)
                 o_tbl.scale(1, 1.2)
-
-            # ---- Carrier concentration table ----
-            df_route_full = df_full[df_full["route"] == route]
-            carrier_st = (
-                df_route_full.groupby(["vehicle_carrier", "supply_type"])["executed_load"]
-                .sum().unstack(fill_value=0).reset_index()
-            )
-            for st in SUPPLY_TYPES_ORDERED:
-                if st not in carrier_st.columns:
-                    carrier_st[st] = 0
-            other_cols = [c for c in carrier_st.columns
-                          if c not in ["vehicle_carrier"] + SUPPLY_TYPES_ORDERED]
-            carrier_st["Other"] = carrier_st[other_cols].sum(axis=1) if other_cols else 0
-            carrier_st["Total"] = carrier_st[SUPPLY_TYPES_ORDERED + ["Other"]].sum(axis=1)
-            grand_total = carrier_st["Total"].sum()
-            carrier_st["Share"] = (carrier_st["Total"] / grand_total * 100) if grand_total > 0 else 0
-            carrier_st = carrier_st.sort_values("Total", ascending=False)
-
-            conc_rows = []
-            for _, cr in carrier_st.iterrows():
-                conc_rows.append([
-                    cr["vehicle_carrier"],
-                    int(cr.get("1.AZNG", 0)), int(cr.get("2.RLB", 0)),
-                    int(cr.get("3.3P", 0)), int(cr.get("Other", 0)),
-                    int(cr["Total"]), f"{cr['Share']:.1f}%",
-                ])
-            # HHI totals row
-            conc_rows.append([
-                f"HHI: {route_hhi:.3f} ({risk})", "", "", "", "",
-                int(grand_total), "100%",
-            ])
-
-            c_tbl = ax_conc.table(
-                cellText=conc_rows,
-                colLabels=["Carrier", "AZNG", "RLB", "3P", "Other", "Total Loads", "Share"],
-                cellLoc="center", loc="center",
-            )
-            _style_table(c_tbl, fontsize=10)
-            c_tbl.scale(1, 1.5)
-
-            # Style HHI totals row
-            hhi_row = len(conc_rows)
-            for ci in range(7):
-                c_tbl[hhi_row, ci].set_text_props(fontweight="bold")
-                c_tbl[hhi_row, ci].set_facecolor(hhi_color)
-                if risk == "HIGH":
-                    c_tbl[hhi_row, ci].set_text_props(color="white", fontweight="bold")
 
             plt.tight_layout(rect=[0, 0.01, 1, 0.96])
             pdf.savefig(fig, bbox_inches="tight")
