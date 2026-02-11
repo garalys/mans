@@ -9,7 +9,6 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 import boto3
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
 import os
 import logging
 import duckdb
@@ -84,27 +83,13 @@ class MonthlyReportGenerator:
         return year, month
 
     # --------------------------------------------------------------------------
-    def _get_historical_periods(self, year, month, lookback_months=12):
-        """Build list of (Ryear, Mmonth) tuples for the last N months."""
-        y = int(year.replace("R", ""))
-        m = int(month.replace("M", ""))
-        target = datetime(y, m, 1)
-
-        periods = []
-        for i in range(lookback_months):
-            dt = target - relativedelta(months=i)
-            periods.append((f"R{dt.year}", f"M{dt.month:02d}"))
-        return periods
-
-    # --------------------------------------------------------------------------
-    def load_data(self, year, month, load_history=False, lookback_months=12):
+    def load_data(self, year, month):
         """Load and process data from S3."""
         logger.info("=" * 80)
         logger.info("STARTING DATA LOAD")
         logger.info("=" * 80)
 
         try:
-            # -------------------- Route data --------------------
             input_path = f"s3://{self.s3_bucket}/input-data/data.csv"
             logger.info(f"Loading route data from: {input_path}")
             obj = self.s3_client.get_object(
@@ -115,22 +100,6 @@ class MonthlyReportGenerator:
             df_raw = pd.read_csv(io.BytesIO(obj["Body"].read()))
             logger.info(f"Loaded {len(df_raw)} rows from S3")
             conn = duckdb.connect()
-
-            if load_history:
-                periods = self._get_historical_periods(year, month, lookback_months)
-                period_filter = " OR ".join(
-                    f"(report_year = '{y}' AND report_month = '{m}')"
-                    for y, m in periods
-                )
-                where_clause = f"({period_filter})"
-                logger.info(
-                    f"Loading historical data: {len(periods)} periods "
-                    f"({periods[-1][0]} {periods[-1][1]} to {periods[0][0]} {periods[0][1]})"
-                )
-            else:
-                where_clause = (
-                    f"report_year = '{year}' AND report_month = '{month}'"
-                )
 
             query = f"""
                 SELECT
@@ -147,7 +116,9 @@ class MonthlyReportGenerator:
                     SUM(distance_for_cpkm) AS total_distance,
                     SUM(executed_loads) AS executed_load
                 FROM df_raw
-                WHERE {where_clause}
+                WHERE
+                report_year = '{year}'
+                AND report_month = '{month}'
                 GROUP BY ALL
             """
 
@@ -298,8 +269,10 @@ class MonthlyReportGenerator:
         return valid_routes
 
     # --------------------------------------------------------------------------
+    # Supply Type Overview (table only, no box/violin)
+    # --------------------------------------------------------------------------
     def _create_supply_type_summary(self, pdf, df, year, month):
-        """Create a descriptive stats summary page per supply type."""
+        """Summary table with P2.5/P97.5 instead of raw min/max."""
         logger.info("Creating supply type summary page...")
 
         sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
@@ -310,17 +283,21 @@ class MonthlyReportGenerator:
         for st in supply_types:
             vals = df.loc[df["supply_type"] == st, "cpkm"].dropna()
             sub = df[df["supply_type"] == st]
+            n_carriers = sub["vehicle_carrier"].nunique()
+            total_loads = int(sub["executed_load"].sum())
+            lcr = total_loads / n_carriers if n_carriers > 0 else 0
             rows.append({
                 "Supply Type": st,
-                "Loads": int(sub["executed_load"].sum()),
+                "Loads": total_loads,
                 "Total Cost": f"{sub['total_cost'].sum():,.0f}",
-                "Total Volume m3": f"{sub['cubes'].sum():,.0f}" if "cubes" in sub.columns else "N/A",
+                "Volume m3": f"{sub['cubes'].sum():,.0f}" if "cubes" in sub.columns else "N/A",
                 "Routes": sub["route"].nunique(),
-                "Carriers": sub["vehicle_carrier"].nunique(),
+                "Carriers": n_carriers,
+                "LCR": f"{lcr:.1f}",
                 "Mean CPKM": f"{vals.mean():.4f}",
                 "Median CPKM": f"{vals.median():.4f}",
-                "Min CPKM": f"{vals.min():.4f}",
-                "Max CPKM": f"{vals.max():.4f}",
+                "P2.5": f"{np.percentile(vals, 2.5):.4f}",
+                "P97.5": f"{np.percentile(vals, 97.5):.4f}",
                 "P25": f"{np.percentile(vals, 25):.4f}",
                 "P75": f"{np.percentile(vals, 75):.4f}",
                 "Std CPKM": f"{vals.std():.4f}",
@@ -328,8 +305,7 @@ class MonthlyReportGenerator:
 
         summary_df = pd.DataFrame(rows)
 
-        # --- Page 1: Summary table ---
-        fig, ax = plt.subplots(figsize=(22, 4 + len(supply_types) * 0.8))
+        fig, ax = plt.subplots(figsize=(24, 4 + len(supply_types) * 0.8))
         ax.axis("off")
         ax.set_title(
             f"Supply Type Overview  -  {year} {month}",
@@ -342,44 +318,163 @@ class MonthlyReportGenerator:
             cellLoc="center",
             loc="center",
         )
-        _style_table(table, fontsize=11)
+        _style_table(table, fontsize=10)
         table.scale(1, 2.0)
 
         plt.tight_layout()
         pdf.savefig(fig, bbox_inches="tight")
         plt.close()
 
-        # --- Page 2: Box + violin plots ---
-        fig, axes = plt.subplots(1, 2, figsize=(22, 8))
-        fig.suptitle(
-            f"CPKM Distribution by Supply Type  -  {year} {month}",
-            fontsize=20, fontweight="bold",
+        logger.info("Supply type summary page created")
+
+    # --------------------------------------------------------------------------
+    # Top routes by cost/volume - histograms with hue=supply_type + box plots
+    # --------------------------------------------------------------------------
+    def _create_top_routes_overview(
+        self, pdf, df, year, month, top_n=15, top_filter="total_cost",
+        title_label="Cost",
+    ):
+        """Histograms + box plots + descriptive stats table per route."""
+        logger.info(f"Creating top {top_n} routes by {title_label}...")
+
+        sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
+
+        top_routes = (
+            df.groupby("route", as_index=False)[top_filter]
+            .sum()
+            .sort_values(top_filter, ascending=False)
+            .head(top_n)["route"]
+            .tolist()
         )
 
-        sns.boxplot(
-            data=df, x="supply_type", y="cpkm",
-            palette=SEABORN_PALETTE, ax=axes[0],
-            showfliers=False,
-        )
-        axes[0].set_title("Box Plot (outliers hidden for clarity)", fontsize=14)
-        axes[0].set_xlabel("Supply Type", fontsize=12)
-        axes[0].set_ylabel("CPKM", fontsize=12)
+        df_top = df[df["route"].isin(top_routes)].copy()
 
-        sns.violinplot(
-            data=df, x="supply_type", y="cpkm",
-            palette=SEABORN_PALETTE, ax=axes[1],
-            inner="quartile", cut=0,
-        )
-        axes[1].set_title("Violin Plot (density shape + quartiles)", fontsize=14)
-        axes[1].set_xlabel("Supply Type", fontsize=12)
-        axes[1].set_ylabel("CPKM", fontsize=12)
+        # Consistent supply type colors
+        supply_types = sorted(df["supply_type"].dropna().unique())
+        palette = sns.color_palette(SEABORN_PALETTE, len(supply_types))
+        color_map = {st: palette[i] for i, st in enumerate(supply_types)}
 
-        plt.tight_layout(rect=[0, 0, 1, 0.93])
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
+        # One page per route: histogram + box plot + stats table
+        for route in top_routes:
+            df_r = df_top[df_top["route"] == route]
+            vals = df_r["cpkm"].dropna()
 
-        logger.info("Supply type summary pages created")
+            if vals.empty:
+                continue
 
+            origin = df_r["orig_eu5_country"].iloc[0]
+            dest = df_r["dest_eu5_country"].iloc[0]
+
+            fig = plt.figure(figsize=(24, 16))
+            gs = fig.add_gridspec(2, 2, height_ratios=[3, 2])
+
+            ax_hist = fig.add_subplot(gs[0, 0])
+            ax_box = fig.add_subplot(gs[0, 1])
+            ax_table = fig.add_subplot(gs[1, :])
+            ax_table.axis("off")
+
+            fig.suptitle(
+                f"Top Routes by {title_label}  -  {year} {month}\n"
+                f"{route} | {origin} -> {dest}",
+                fontsize=18, fontweight="bold",
+            )
+
+            # ---- Histogram with hue=supply_type ----
+            bin_edges = np.histogram_bin_edges(vals, bins=30)
+
+            for st in df_r["supply_type"].dropna().unique():
+                st_vals = df_r.loc[df_r["supply_type"] == st, "cpkm"].dropna()
+                if st_vals.empty:
+                    continue
+                label = f"{st} (u={st_vals.mean():.2f}, m={st_vals.median():.2f})"
+                ax_hist.hist(
+                    st_vals, bins=bin_edges, alpha=0.6, label=label,
+                    edgecolor="black", color=color_map.get(st),
+                )
+
+            ax_hist.set_title("CPKM Distribution by Supply Type", fontsize=13, fontweight="bold")
+            ax_hist.set_xlabel("CPKM", fontsize=11)
+            ax_hist.set_ylabel("Number of Loads", fontsize=11)
+            ax_hist.legend(fontsize=9)
+            ax_hist.grid(True, alpha=0.3)
+
+            # ---- Box plot by supply type ----
+            st_present = sorted(df_r["supply_type"].dropna().unique())
+            if len(st_present) > 0:
+                sns.boxplot(
+                    data=df_r, x="supply_type", y="cpkm",
+                    palette=color_map, ax=ax_box,
+                    showfliers=True, fliersize=3,
+                    order=st_present,
+                )
+            ax_box.set_title("CPKM Box Plot by Supply Type", fontsize=13, fontweight="bold")
+            ax_box.set_xlabel("Supply Type", fontsize=11)
+            ax_box.set_ylabel("CPKM", fontsize=11)
+
+            # ---- Descriptive stats table per supply type + overall ----
+            table_rows = []
+            for st in st_present:
+                sub = df_r[df_r["supply_type"] == st]
+                st_vals = sub["cpkm"].dropna()
+                n_carriers = sub["vehicle_carrier"].nunique()
+                st_loads = int(sub["executed_load"].sum())
+                lcr = st_loads / n_carriers if n_carriers > 0 else 0
+                table_rows.append([
+                    st,
+                    f"{sub['total_cost'].sum():,.0f}",
+                    f"{sub['cubes'].sum():,.0f}" if "cubes" in sub.columns else "N/A",
+                    st_loads,
+                    n_carriers,
+                    f"{lcr:.1f}",
+                    f"{st_vals.mean():.3f}" if len(st_vals) > 0 else "-",
+                    f"{st_vals.median():.3f}" if len(st_vals) > 0 else "-",
+                    f"{np.percentile(st_vals, 25):.3f}" if len(st_vals) > 0 else "-",
+                    f"{np.percentile(st_vals, 75):.3f}" if len(st_vals) > 0 else "-",
+                ])
+
+            # Overall row
+            n_carriers_all = df_r["vehicle_carrier"].nunique()
+            total_loads_all = int(df_r["executed_load"].sum())
+            lcr_all = total_loads_all / n_carriers_all if n_carriers_all > 0 else 0
+            table_rows.append([
+                "OVERALL",
+                f"{df_r['total_cost'].sum():,.0f}",
+                f"{df_r['cubes'].sum():,.0f}" if "cubes" in df_r.columns else "N/A",
+                total_loads_all,
+                n_carriers_all,
+                f"{lcr_all:.1f}",
+                f"{vals.mean():.3f}",
+                f"{vals.median():.3f}",
+                f"{np.percentile(vals, 25):.3f}",
+                f"{np.percentile(vals, 75):.3f}",
+            ])
+
+            tbl = ax_table.table(
+                cellText=table_rows,
+                colLabels=[
+                    "Supply Type", "Total Cost", "Volume m3", "Loads",
+                    "Carriers", "LCR", "Mean CPKM", "Median CPKM", "P25", "P75",
+                ],
+                cellLoc="center",
+                loc="center",
+            )
+            _style_table(tbl, fontsize=10)
+            tbl.scale(1, 1.8)
+
+            # Bold the OVERALL row
+            n_data_rows = len(table_rows)
+            for col_idx in range(10):
+                tbl[n_data_rows, col_idx].set_text_props(fontweight="bold")
+                tbl[n_data_rows, col_idx].set_facecolor("#D6E4F0")
+
+            plt.tight_layout(rect=[0, 0, 1, 0.93])
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close()
+
+        logger.info(f"Top routes by {title_label} created")
+
+    # --------------------------------------------------------------------------
+    # Per supply type MAD analysis
     # --------------------------------------------------------------------------
     def plot_supply_type_analysis(
         self, pdf, df, supply_type, cpkm_column="cpkm", mad_cutoff=3, top_n=8
@@ -398,6 +493,7 @@ class MonthlyReportGenerator:
             df_supply, cpkm_col=cpkm_column, mad_cutoff=mad_cutoff
         )
 
+        # Only routes with MAD variance
         valid_routes = self.filter_routes_with_mad_variance(
             df_supply, df_supply["route"].unique(), min_obs=5
         )
@@ -415,16 +511,25 @@ class MonthlyReportGenerator:
             .index.tolist()
         )
 
+        # Only pass routes that have MAD variance
+        routes_filtered = self.filter_routes_with_mad_variance(
+            df_supply, routes_top_mad, cpkm_col=cpkm_column, min_obs=3
+        )
+
+        if not routes_filtered:
+            logger.warning("No routes with MAD variance after filtering")
+            return
+
         # Plot 1: by carrier (outliers only get names, rest = "OK")
         self._create_mad_plots(
-            pdf, df_supply, routes_top_mad, supply_type, cpkm_column,
+            pdf, df_supply, routes_filtered, supply_type, cpkm_column,
             mad_cutoff, hue_column="vehicle_carrier",
             title_suffix=f"MAD Outlier Analysis - {supply_type}",
         )
 
         # Plot 2: by is_set
         self._create_mad_plots(
-            pdf, df_supply, routes_top_mad, supply_type, cpkm_column,
+            pdf, df_supply, routes_filtered, supply_type, cpkm_column,
             mad_cutoff, hue_column="is_set",
             title_suffix=f"MAD Outlier Analysis - {supply_type} - Split by SET",
         )
@@ -432,15 +537,15 @@ class MonthlyReportGenerator:
     # --------------------------------------------------------------------------
     def _create_mad_plots(
         self, pdf, df, routes, supply_type, cpkm_column, mad_cutoff,
-        hue_column="vehicle_carrier", title_suffix="", max_outlier_rows=6,
+        hue_column="vehicle_carrier", title_suffix="",
     ):
         sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
 
         n_cols = 2
         n_rows = int(np.ceil(len(routes) / n_cols))
 
-        fig = plt.figure(figsize=(24, 12 * n_rows))
-        gs = fig.add_gridspec(n_rows * 2, n_cols, height_ratios=[3, 2] * n_rows)
+        fig = plt.figure(figsize=(24, 14 * n_rows))
+        gs = fig.add_gridspec(n_rows * 2, n_cols, height_ratios=[3, 2.5] * n_rows)
 
         fig.suptitle(
             title_suffix,
@@ -510,7 +615,6 @@ class MonthlyReportGenerator:
                 ax=ax_plot,
             )
 
-            # ---- MAD cutoff line ----
             ax_plot.axvline(
                 mad_threshold,
                 color="red",
@@ -529,11 +633,20 @@ class MonthlyReportGenerator:
             ax_plot.set_xlabel("CPKM", fontsize=12)
             ax_plot.set_ylabel("Number of loads", fontsize=12)
 
-            # ---- Summary table ----
+            # ---- Summary table with cubes, mean, LCR ----
+            n_carriers = df_r["vehicle_carrier"].nunique()
+            total_loads = int(df_r["executed_load"].sum())
+            lcr = total_loads / n_carriers if n_carriers > 0 else 0
+            total_cubes = df_r["cubes"].sum() if "cubes" in df_r.columns else 0
+
             summary_data = [
-                ["Loads", f"{int(df_r.executed_load.sum())}"],
-                ["Total cost", f"{df_r.total_cost.sum():,.0f}"],
+                ["Loads", f"{total_loads}"],
+                ["Carriers", f"{n_carriers}"],
+                ["LCR", f"{lcr:.1f}"],
+                ["Total Cost", f"{df_r.total_cost.sum():,.0f}"],
+                ["Volume m3", f"{total_cubes:,.0f}"],
                 ["Cost over MAD", f"{df_r.cost_over_threshold.sum():,.0f}"],
+                ["Mean CPKM", f"{vals.mean():.3f}"],
                 ["Median CPKM", f"{median:.3f}"],
                 ["MAD", f"{mad:.3f}"],
                 ["MAD Threshold", f"{mad_threshold:.3f}"],
@@ -543,12 +656,12 @@ class MonthlyReportGenerator:
                 cellText=summary_data,
                 colLabels=["Metric", "Value"],
                 cellLoc="center",
-                bbox=[0.00, 0.55, 1.00, 0.40],
+                bbox=[0.00, 0.60, 1.00, 0.38],
             )
-            _style_table(summary_tbl, fontsize=11)
-            summary_tbl.scale(1.1, 1.6)
+            _style_table(summary_tbl, fontsize=10)
+            summary_tbl.scale(1.1, 1.4)
 
-            # ---- Outlier detail table ----
+            # ---- Outlier detail table (ALL outliers, no limit) ----
             if hue_column == "vehicle_carrier":
                 group_column = "is_set"
             else:
@@ -579,29 +692,20 @@ class MonthlyReportGenerator:
                     np.nan,
                 )
 
-                extra = max(0, len(out_tbl_df) - max_outlier_rows)
-                out_tbl_df = out_tbl_df.head(max_outlier_rows)
-
                 out_rows = [
                     [
-                        carrier,
-                        st,
-                        int(r.Loads),
-                        f"{r.Avg_MAD:.2f}",
-                        f"{r.Max_MAD:.2f}",
-                        f"{r.Cost:,.0f}",
-                        f"{r.Distance:,.0f}",
+                        carrier, st, int(r.Loads),
+                        f"{r.Avg_MAD:.2f}", f"{r.Max_MAD:.2f}",
+                        f"{r.Cost:,.0f}", f"{r.Distance:,.0f}",
                         f"{r.Cost_Over_Threshold:,.0f}",
-                        f"{r.Outlier_CPKM:,.2f}",
-                        f"{r.CPKM_Over_MAD:,.2f}",
+                        f"{r.Outlier_CPKM:,.2f}", f"{r.CPKM_Over_MAD:,.2f}",
                     ]
                     for (carrier, st), r in out_tbl_df.iterrows()
                 ]
 
-                if extra > 0:
-                    out_rows.append([
-                        f"+ {extra} more", "", "", "", "", "", "", "", "", "",
-                    ])
+                # Scale table height based on number of rows
+                n_out = len(out_rows)
+                tbl_height = min(0.55, 0.06 + n_out * 0.045)
 
                 out_tbl = ax_table.table(
                     cellText=out_rows,
@@ -612,94 +716,25 @@ class MonthlyReportGenerator:
                         "CPKM", "CPKM over MAD",
                     ],
                     cellLoc="center",
-                    bbox=[0.00, 0.00, 1.00, 0.50],
+                    bbox=[0.00, max(0.0, 0.55 - tbl_height), 1.00, tbl_height],
                 )
-                _style_table(out_tbl, fontsize=10)
-                out_tbl.scale(1.1, 1.5)
+                _style_table(out_tbl, fontsize=9)
+                out_tbl.scale(1.1, 1.3)
 
         plt.tight_layout(rect=[0, 0.02, 1, 0.97])
         pdf.savefig(fig, bbox_inches="tight")
         plt.close()
 
     # --------------------------------------------------------------------------
-    # ANALYTICS: Route-level supply type benchmark
-    # --------------------------------------------------------------------------
-    def _create_route_supply_benchmark(self, pdf, df, year, month, top_n=15):
-        """Side-by-side box plots of CPKM by supply type for top routes."""
-        logger.info("Creating route-level supply type benchmark...")
-
-        sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
-
-        top_routes = (
-            df.groupby("route")["total_cost"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(top_n)
-            .index.tolist()
-        )
-
-        df_top = df[df["route"].isin(top_routes)].copy()
-
-        # Order routes by total cost descending
-        route_order = (
-            df_top.groupby("route")["total_cost"]
-            .sum()
-            .sort_values(ascending=False)
-            .index.tolist()
-        )
-
-        n_cols = 3
-        n_rows = int(np.ceil(len(route_order) / n_cols))
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(24, 5 * n_rows))
-        fig.suptitle(
-            f"Route-Level Supply Type Benchmark  -  {year} {month}\n"
-            f"CPKM by Supply Type for Top {top_n} Routes by Cost",
-            fontsize=20, fontweight="bold",
-        )
-        axes = np.array(axes).flatten()
-
-        for idx, route in enumerate(route_order):
-            ax = axes[idx]
-            df_r = df_top[df_top["route"] == route]
-
-            sns.boxplot(
-                data=df_r, x="supply_type", y="cpkm",
-                palette=SEABORN_PALETTE, ax=ax,
-                showfliers=True, fliersize=3,
-            )
-
-            origin = df_r["orig_eu5_country"].iloc[0]
-            dest = df_r["dest_eu5_country"].iloc[0]
-            total_cost = df_r["total_cost"].sum()
-
-            ax.set_title(
-                f"{route}\n{origin} -> {dest} | Cost: {total_cost:,.0f}",
-                fontsize=10, fontweight="bold",
-            )
-            ax.set_xlabel("")
-            ax.set_ylabel("CPKM", fontsize=9)
-            ax.tick_params(axis="x", labelsize=8)
-
-        for j in range(len(route_order), len(axes)):
-            fig.delaxes(axes[j])
-
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
-
-        logger.info("Route-level supply type benchmark created")
-
-    # --------------------------------------------------------------------------
-    # ANALYTICS: Carrier concentration risk (Herfindahl index)
+    # Carrier concentration risk (Herfindahl index)
     # --------------------------------------------------------------------------
     def _create_carrier_concentration(self, pdf, df, year, month, top_n=30):
-        """Herfindahl index per route. High HHI + high CPKM = negotiation leverage."""
+        """HHI per route with scatter (outlier-trimmed) + two tables (by cost, by volume)."""
         logger.info("Creating carrier concentration analysis...")
 
         sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
 
-        # Compute HHI per route: sum of squared market shares by carrier
+        # Compute HHI per route
         route_carrier = (
             df.groupby(["route", "vehicle_carrier"])["executed_load"]
             .sum()
@@ -723,34 +758,53 @@ class MonthlyReportGenerator:
             .reset_index()
         )
 
-        # Attach route-level CPKM and cost
+        # Route-level stats
         route_stats = (
             df.groupby("route")
             .agg(
                 total_cost=("total_cost", "sum"),
                 total_distance=("total_distance", "sum"),
                 total_loads=("executed_load", "sum"),
+                total_cubes=("cubes", "sum"),
                 median_cpkm=("cpkm", "median"),
+                mean_cpkm=("cpkm", "mean"),
+                n_carriers=("vehicle_carrier", "nunique"),
+            )
+            .reset_index()
+        )
+        route_stats["lcr"] = route_stats["total_loads"] / route_stats["n_carriers"]
+
+        # Supply type breakdown per route
+        route_supply = (
+            df.groupby(["route", "supply_type"])
+            .agg(
+                st_cost=("total_cost", "sum"),
+                st_cubes=("cubes", "sum"),
+                st_loads=("executed_load", "sum"),
+                st_carriers=("vehicle_carrier", "nunique"),
+                st_mean_cpkm=("cpkm", "mean"),
+                st_median_cpkm=("cpkm", "median"),
             )
             .reset_index()
         )
 
         hhi = hhi.merge(route_stats, on="route")
-
-        # Filter to routes with meaningful volume
         hhi = hhi[hhi["total_loads"] >= 5].copy()
 
-        # Top routes by cost for the table
-        hhi_top = hhi.sort_values("total_cost", ascending=False).head(top_n)
+        # ---- Scatter plot: trim CPKM outliers for readable axes ----
+        cpkm_lo = hhi["median_cpkm"].quantile(0.02)
+        cpkm_hi = hhi["median_cpkm"].quantile(0.98)
+        hhi_plot = hhi[
+            (hhi["median_cpkm"] >= cpkm_lo) & (hhi["median_cpkm"] <= cpkm_hi)
+        ]
 
-        # --- Page 1: Scatter plot HHI vs CPKM ---
         fig, ax = plt.subplots(figsize=(22, 12))
 
         scatter = ax.scatter(
-            hhi["hhi"],
-            hhi["median_cpkm"],
-            s=hhi["total_cost"] / hhi["total_cost"].max() * 800 + 20,
-            c=hhi["hhi"],
+            hhi_plot["hhi"],
+            hhi_plot["median_cpkm"],
+            s=hhi_plot["total_cost"] / hhi_plot["total_cost"].max() * 800 + 20,
+            c=hhi_plot["hhi"],
             cmap="RdYlGn_r",
             alpha=0.65,
             edgecolors="black",
@@ -759,7 +813,8 @@ class MonthlyReportGenerator:
 
         ax.set_title(
             f"Carrier Concentration Risk  -  {year} {month}\n"
-            f"Bubble size = Total cost | Color = HHI (red = concentrated)",
+            f"Bubble size = Total cost | Color = HHI (red = concentrated)\n"
+            f"CPKM trimmed to P2-P98 for readability",
             fontsize=18, fontweight="bold",
         )
         ax.set_xlabel("Herfindahl-Hirschman Index (HHI)", fontsize=14)
@@ -776,359 +831,109 @@ class MonthlyReportGenerator:
         pdf.savefig(fig, bbox_inches="tight")
         plt.close()
 
-        # --- Page 2: Table of top routes by cost with HHI ---
-        fig, ax = plt.subplots(figsize=(22, 2 + len(hhi_top) * 0.5))
-        ax.axis("off")
-        ax.set_title(
+        # ---- Helper to build detailed table ----
+        def _build_concentration_table(hhi_subset, sort_col, title):
+            top = hhi_subset.sort_values(sort_col, ascending=False).head(top_n)
+
+            tbl_data = []
+            for _, r in top.iterrows():
+                risk = "HIGH" if r.hhi >= 0.50 else ("MOD" if r.hhi >= 0.25 else "LOW")
+
+                # Supply type breakdown
+                rt_supply = route_supply[route_supply["route"] == r.route]
+                st_parts = []
+                for _, s in rt_supply.iterrows():
+                    st_lcr = s.st_loads / s.st_carriers if s.st_carriers > 0 else 0
+                    st_parts.append(
+                        f"{s.supply_type}: "
+                        f"C={s.st_cost:,.0f} V={s.st_cubes:,.0f} "
+                        f"L={int(s.st_loads)} LCR={st_lcr:.1f} "
+                        f"u={s.st_mean_cpkm:.3f} m={s.st_median_cpkm:.3f}"
+                    )
+                st_info = " | ".join(st_parts)
+
+                tbl_data.append([
+                    r.route,
+                    f"{r.total_cost:,.0f}",
+                    f"{r.total_cubes:,.0f}",
+                    int(r.total_loads),
+                    int(r.n_carriers),
+                    f"{r.lcr:.1f}",
+                    f"{r.mean_cpkm:.3f}",
+                    f"{r.median_cpkm:.3f}",
+                    f"{r.hhi:.3f}",
+                    risk,
+                    st_info,
+                ])
+
+            # Two-column layout: main table on left page, supply detail wraps
+            fig, ax = plt.subplots(figsize=(28, 3 + len(tbl_data) * 0.6))
+            ax.axis("off")
+            ax.set_title(title, fontsize=16, fontweight="bold", pad=20)
+
+            table = ax.table(
+                cellText=tbl_data,
+                colLabels=[
+                    "Route", "Total Cost", "Volume m3", "Loads", "Carriers",
+                    "LCR", "Mean CPKM", "Median CPKM", "HHI", "Risk",
+                    "Supply Type Breakdown",
+                ],
+                cellLoc="center",
+                loc="center",
+            )
+            _style_table(table, fontsize=8)
+            table.scale(1, 1.6)
+
+            # Set supply type column wider
+            for row_idx in range(len(tbl_data) + 1):
+                table[row_idx, 10].set_text_props(fontsize=7, ha="left")
+
+            # Color-code risk
+            for row_idx in range(1, len(tbl_data) + 1):
+                risk_cell = table[row_idx, 9]
+                risk_val = tbl_data[row_idx - 1][9]
+                if risk_val == "HIGH":
+                    risk_cell.set_facecolor("#FF6B6B")
+                    risk_cell.set_text_props(color="white", fontweight="bold")
+                elif risk_val == "MOD":
+                    risk_cell.set_facecolor("#FFD93D")
+
+            plt.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close()
+
+        # ---- Table 1: Top by cost ----
+        _build_concentration_table(
+            hhi, "total_cost",
             f"Carrier Concentration - Top {top_n} Routes by Cost  -  {year} {month}",
-            fontsize=18, fontweight="bold", pad=20,
         )
 
-        tbl_data = []
-        for _, r in hhi_top.iterrows():
-            risk = "HIGH" if r.hhi >= 0.50 else ("MODERATE" if r.hhi >= 0.25 else "LOW")
-            tbl_data.append([
-                r.route,
-                f"{r.total_cost:,.0f}",
-                int(r.total_loads),
-                f"{r.median_cpkm:.3f}",
-                f"{r.hhi:.3f}",
-                risk,
-            ])
-
-        table = ax.table(
-            cellText=tbl_data,
-            colLabels=["Route", "Total Cost", "Loads", "Median CPKM", "HHI", "Risk"],
-            cellLoc="center",
-            loc="center",
+        # ---- Table 2: Top by volume ----
+        _build_concentration_table(
+            hhi, "total_cubes",
+            f"Carrier Concentration - Top {top_n} Routes by Volume  -  {year} {month}",
         )
-        _style_table(table, fontsize=10)
-        table.scale(1, 1.8)
-
-        # Color-code the risk column
-        for row_idx in range(1, len(tbl_data) + 1):
-            risk_cell = table[row_idx, 5]
-            risk_val = tbl_data[row_idx - 1][5]
-            if risk_val == "HIGH":
-                risk_cell.set_facecolor("#FF6B6B")
-                risk_cell.set_text_props(color="white", fontweight="bold")
-            elif risk_val == "MODERATE":
-                risk_cell.set_facecolor("#FFD93D")
-
-        plt.tight_layout()
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
 
         logger.info("Carrier concentration analysis created")
 
     # --------------------------------------------------------------------------
-    # ANALYTICS: Month-over-month trend
-    # --------------------------------------------------------------------------
-    def _create_mom_trend(self, pdf, df_historical, year, month):
-        """Small-multiples line chart of CPKM trend per supply type."""
-        logger.info("Creating month-over-month trend analysis...")
-
-        sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
-
-        # Build a period sort key
-        df_historical = df_historical.copy()
-        df_historical["period"] = (
-            df_historical["report_year"] + " " + df_historical["report_month"]
-        )
-        df_historical["period_sort"] = (
-            df_historical["report_year"].str.replace("R", "").astype(int) * 100
-            + df_historical["report_month"].str.replace("M", "").astype(int)
-        )
-
-        # Aggregate weighted CPKM per period + supply type
-        agg = (
-            df_historical.groupby(["period", "period_sort", "supply_type"])
-            .agg(
-                total_cost=("total_cost", "sum"),
-                total_distance=("total_distance", "sum"),
-                total_loads=("executed_load", "sum"),
-                median_cpkm=("cpkm", "median"),
-                mean_cpkm=("cpkm", "mean"),
-            )
-            .reset_index()
-        )
-        agg["weighted_cpkm"] = np.where(
-            agg["total_distance"] > 0,
-            agg["total_cost"] / agg["total_distance"],
-            np.nan,
-        )
-        agg = agg.sort_values("period_sort")
-
-        supply_types = sorted(agg["supply_type"].dropna().unique())
-
-        # --- Page 1: Weighted CPKM trend ---
-        fig, axes = plt.subplots(1, 2, figsize=(24, 8))
-        fig.suptitle(
-            f"Month-over-Month CPKM Trend  -  up to {year} {month}",
-            fontsize=20, fontweight="bold",
-        )
-
-        for st in supply_types:
-            sub = agg[agg["supply_type"] == st].sort_values("period_sort")
-            axes[0].plot(
-                sub["period"], sub["weighted_cpkm"],
-                marker="o", linewidth=2, markersize=5, label=st,
-            )
-            axes[1].plot(
-                sub["period"], sub["total_loads"],
-                marker="s", linewidth=2, markersize=5, label=st,
-            )
-
-        axes[0].set_title("Weighted CPKM (cost / distance)", fontsize=14)
-        axes[0].set_ylabel("CPKM", fontsize=12)
-        axes[0].legend(fontsize=11)
-        axes[0].tick_params(axis="x", rotation=45, labelsize=9)
-        axes[0].grid(True, alpha=0.3)
-
-        axes[1].set_title("Total Loads", fontsize=14)
-        axes[1].set_ylabel("Loads", fontsize=12)
-        axes[1].legend(fontsize=11)
-        axes[1].tick_params(axis="x", rotation=45, labelsize=9)
-        axes[1].grid(True, alpha=0.3)
-
-        plt.tight_layout(rect=[0, 0, 1, 0.93])
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
-
-        # --- Page 2: Small multiples per supply type (median + P25/P75 band) ---
-        n_st = len(supply_types)
-        fig, axes = plt.subplots(1, n_st, figsize=(8 * n_st, 7), sharey=True)
-        if n_st == 1:
-            axes = [axes]
-
-        fig.suptitle(
-            f"CPKM Trend by Supply Type (Median + P25/P75)  -  up to {year} {month}",
-            fontsize=18, fontweight="bold",
-        )
-
-        # Need percentiles from raw data
-        pct_agg = (
-            df_historical.groupby(["period", "period_sort", "supply_type"])["cpkm"]
-            .agg(["median", lambda x: np.percentile(x, 25), lambda x: np.percentile(x, 75)])
-            .reset_index()
-        )
-        pct_agg.columns = ["period", "period_sort", "supply_type", "median", "p25", "p75"]
-        pct_agg = pct_agg.sort_values("period_sort")
-
-        palette = sns.color_palette(SEABORN_PALETTE, n_st)
-
-        for i, st in enumerate(supply_types):
-            ax = axes[i]
-            sub = pct_agg[pct_agg["supply_type"] == st]
-
-            ax.fill_between(
-                sub["period"], sub["p25"], sub["p75"],
-                alpha=0.2, color=palette[i],
-            )
-            ax.plot(
-                sub["period"], sub["median"],
-                marker="o", linewidth=2, color=palette[i], label="Median",
-            )
-
-            ax.set_title(st, fontsize=14, fontweight="bold")
-            ax.set_ylabel("CPKM" if i == 0 else "", fontsize=12)
-            ax.tick_params(axis="x", rotation=45, labelsize=8)
-            ax.legend(fontsize=9)
-            ax.grid(True, alpha=0.3)
-
-        plt.tight_layout(rect=[0, 0, 1, 0.92])
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
-
-        logger.info("Month-over-month trend created")
-
-    # --------------------------------------------------------------------------
-    # ANALYTICS: Volume-weighted CPKM scatter (bubble chart)
-    # --------------------------------------------------------------------------
-    def _create_volume_cpkm_scatter(self, pdf, df, year, month):
-        """Bubble chart: x=distance, y=CPKM, size=volume, color=supply type."""
-        logger.info("Creating volume-weighted CPKM scatter...")
-
-        sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
-
-        route_agg = (
-            df.groupby(["route", "supply_type"])
-            .agg(
-                total_cost=("total_cost", "sum"),
-                total_distance=("total_distance", "sum"),
-                total_loads=("executed_load", "sum"),
-                total_cubes=("cubes", "sum"),
-            )
-            .reset_index()
-        )
-        route_agg["cpkm"] = np.where(
-            route_agg["total_distance"] > 0,
-            route_agg["total_cost"] / route_agg["total_distance"],
-            np.nan,
-        )
-        route_agg = route_agg.dropna(subset=["cpkm"])
-
-        # Bubble size: scale cubes to reasonable point sizes
-        max_cubes = route_agg["total_cubes"].max()
-        route_agg["bubble_size"] = np.where(
-            max_cubes > 0,
-            route_agg["total_cubes"] / max_cubes * 600 + 15,
-            50,
-        )
-
-        supply_types = sorted(route_agg["supply_type"].dropna().unique())
-        palette = sns.color_palette(SEABORN_PALETTE, len(supply_types))
-        color_map = {st: palette[i] for i, st in enumerate(supply_types)}
-
-        fig, ax = plt.subplots(figsize=(24, 12))
-
-        for st in supply_types:
-            sub = route_agg[route_agg["supply_type"] == st]
-            ax.scatter(
-                sub["total_distance"],
-                sub["cpkm"],
-                s=sub["bubble_size"],
-                c=[color_map[st]],
-                alpha=0.55,
-                edgecolors="black",
-                linewidth=0.4,
-                label=f"{st} ({len(sub)} routes)",
-            )
-
-        ax.set_title(
-            f"Volume-Weighted CPKM Scatter  -  {year} {month}\n"
-            f"Bubble size = Volume (m3) | Each dot = one route-supply combo",
-            fontsize=18, fontweight="bold",
-        )
-        ax.set_xlabel("Total Distance (km)", fontsize=14)
-        ax.set_ylabel("CPKM (cost per km)", fontsize=14)
-        ax.legend(fontsize=12, markerscale=0.5)
-
-        plt.tight_layout()
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
-
-        logger.info("Volume-weighted CPKM scatter created")
-
-    # --------------------------------------------------------------------------
-    # ANALYTICS: MAD score distribution per supply type
-    # --------------------------------------------------------------------------
-    def _create_mad_score_distribution(self, pdf, df, year, month, mad_cutoff=3.0):
-        """Violin plot of MAD scores by supply type to show pricing volatility."""
-        logger.info("Creating MAD score distribution per supply type...")
-
-        sns.set_theme(style="whitegrid", palette=SEABORN_PALETTE)
-
-        df = df.copy()
-
-        # Compute MAD score per row (within each route)
-        g = df.groupby("route")["cpkm"]
-        median = g.transform("median")
-        mad = (df["cpkm"] - median).abs().groupby(df["route"]).transform("median")
-
-        df["mad_score"] = np.where(
-            mad > 0,
-            0.6745 * (df["cpkm"] - median) / mad,
-            np.nan,
-        )
-
-        df_valid = df.dropna(subset=["mad_score"])
-
-        if df_valid.empty:
-            logger.warning("No valid MAD scores to plot")
-            return
-
-        # --- Page 1: Violin + box overlay ---
-        fig, axes = plt.subplots(1, 2, figsize=(24, 9))
-        fig.suptitle(
-            f"MAD Score Distribution by Supply Type  -  {year} {month}\n"
-            f"Shows pricing volatility per supply type (higher = more variable)",
-            fontsize=18, fontweight="bold",
-        )
-
-        sns.violinplot(
-            data=df_valid, x="supply_type", y="mad_score",
-            palette=SEABORN_PALETTE, ax=axes[0],
-            inner="quartile", cut=0,
-        )
-        axes[0].axhline(
-            mad_cutoff, color="red", linestyle="--", linewidth=2,
-            label=f"MAD cutoff ({mad_cutoff})",
-        )
-        axes[0].axhline(
-            -mad_cutoff, color="red", linestyle="--", linewidth=2,
-        )
-        axes[0].set_title("Full MAD Score Distribution", fontsize=14)
-        axes[0].set_xlabel("Supply Type", fontsize=12)
-        axes[0].set_ylabel("MAD Score", fontsize=12)
-        axes[0].legend(fontsize=11)
-
-        # Outlier counts as bar chart
-        outlier_counts = (
-            df_valid[df_valid["mad_score"].abs() > mad_cutoff]
-            .groupby("supply_type")
-            .size()
-            .reindex(sorted(df_valid["supply_type"].unique()), fill_value=0)
-        )
-        total_counts = (
-            df_valid.groupby("supply_type")
-            .size()
-            .reindex(sorted(df_valid["supply_type"].unique()), fill_value=0)
-        )
-        outlier_pct = (outlier_counts / total_counts * 100).fillna(0)
-
-        bars = axes[1].bar(
-            outlier_pct.index, outlier_pct.values,
-            color=sns.color_palette(SEABORN_PALETTE, len(outlier_pct)),
-            edgecolor="black", linewidth=0.5,
-        )
-        for bar, pct, cnt in zip(bars, outlier_pct.values, outlier_counts.values):
-            axes[1].text(
-                bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
-                f"{pct:.1f}%\n({cnt})",
-                ha="center", fontsize=11, fontweight="bold",
-            )
-
-        axes[1].set_title(f"% of Loads Exceeding MAD Cutoff ({mad_cutoff})", fontsize=14)
-        axes[1].set_xlabel("Supply Type", fontsize=12)
-        axes[1].set_ylabel("Outlier %", fontsize=12)
-
-        plt.tight_layout(rect=[0, 0, 1, 0.91])
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close()
-
-        logger.info("MAD score distribution created")
-
-    # --------------------------------------------------------------------------
     def generate_report(
         self,
-        enable_route_benchmark=True,
+        enable_top_routes_by_cost=True,
+        enable_top_routes_by_volume=True,
+        enable_mad_analysis=True,
         enable_carrier_concentration=True,
-        enable_mom_trend=True,
-        enable_volume_scatter=True,
-        enable_mad_distribution=True,
-        lookback_months=12,
     ):
         logger.info("=" * 80)
         logger.info("STARTING REPORT GENERATION")
-        logger.info(f"  route_benchmark={enable_route_benchmark}")
+        logger.info(f"  top_routes_by_cost={enable_top_routes_by_cost}")
+        logger.info(f"  top_routes_by_volume={enable_top_routes_by_volume}")
+        logger.info(f"  mad_analysis={enable_mad_analysis}")
         logger.info(f"  carrier_concentration={enable_carrier_concentration}")
-        logger.info(f"  mom_trend={enable_mom_trend}")
-        logger.info(f"  volume_scatter={enable_volume_scatter}")
-        logger.info(f"  mad_distribution={enable_mad_distribution}")
         logger.info("=" * 80)
 
         year, month = self.get_previous_month()
-
-        # Load current month data (always needed)
         df_routes = self.load_data(year, month)
-
-        # Load historical data only if MoM trend is enabled
-        df_historical = None
-        if enable_mom_trend:
-            df_historical = self.load_data(
-                year, month, load_history=True, lookback_months=lookback_months
-            )
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         pdf_filename = f"monthly_report_{year}_{month}_{timestamp}.pdf"
@@ -1153,32 +958,31 @@ class MonthlyReportGenerator:
             pdf.savefig(fig)
             plt.close()
 
-            # ---- Supply type summary (descriptive stats + box/violin) ----
+            # ---- Supply type overview table ----
             self._create_supply_type_summary(pdf, df_routes, year, month)
 
+            # ---- Top 15 routes by cost (histograms + box + stats) ----
+            if enable_top_routes_by_cost:
+                self._create_top_routes_overview(
+                    pdf, df_routes, year, month,
+                    top_n=15, top_filter="total_cost", title_label="Cost",
+                )
+
+            # ---- Top 15 routes by volume (histograms + box + stats) ----
+            if enable_top_routes_by_volume:
+                self._create_top_routes_overview(
+                    pdf, df_routes, year, month,
+                    top_n=15, top_filter="cubes", title_label="Volume",
+                )
+
             # ---- Per supply type MAD analysis ----
-            for supply_type in ["1.AZNG", "2.RLB", "3.3P"]:
-                self.plot_supply_type_analysis(pdf, df_routes, supply_type)
+            if enable_mad_analysis:
+                for supply_type in ["1.AZNG", "2.RLB", "3.3P"]:
+                    self.plot_supply_type_analysis(pdf, df_routes, supply_type)
 
-            # ---- ANALYTICS: Route-level supply type benchmark ----
-            if enable_route_benchmark:
-                self._create_route_supply_benchmark(pdf, df_routes, year, month)
-
-            # ---- ANALYTICS: Carrier concentration risk ----
+            # ---- Carrier concentration risk ----
             if enable_carrier_concentration:
                 self._create_carrier_concentration(pdf, df_routes, year, month)
-
-            # ---- ANALYTICS: Month-over-month trend ----
-            if enable_mom_trend and df_historical is not None:
-                self._create_mom_trend(pdf, df_historical, year, month)
-
-            # ---- ANALYTICS: Volume-weighted CPKM scatter ----
-            if enable_volume_scatter:
-                self._create_volume_cpkm_scatter(pdf, df_routes, year, month)
-
-            # ---- ANALYTICS: MAD score distribution per supply type ----
-            if enable_mad_distribution:
-                self._create_mad_score_distribution(pdf, df_routes, year, month)
 
             info = pdf.infodict()
             info["Title"] = f"Monthly CPKM Report {year} {month}"
@@ -1230,14 +1034,11 @@ def main():
         volume_bucket=os.environ["VOLUME_BUCKET"],
     )
 
-    # Feature flags - set to False to skip any analytics section
     generator.generate_report(
-        enable_route_benchmark=True,
+        enable_top_routes_by_cost=True,
+        enable_top_routes_by_volume=True,
+        enable_mad_analysis=True,
         enable_carrier_concentration=True,
-        enable_mom_trend=True,
-        enable_volume_scatter=True,
-        enable_mad_distribution=True,
-        lookback_months=12,
     )
 
     logger.info("=" * 80)
