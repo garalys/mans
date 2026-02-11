@@ -166,11 +166,11 @@ class MonthlyReportGenerator:
         mad = (df["cpkm"] - med).abs().groupby(df["route"]).transform("median")
         mad_thr = med + mad_cutoff * mad / 0.6745
         df["mad_score"] = np.where(mad > 0, 0.6745 * (df["cpkm"] - med) / mad, np.nan)
+        df["is_outlier"] = (mad > 0) & (df["mad_score"] > mad_cutoff)
         df["cost_over_mad"] = np.where(
-            df["cpkm"] > mad_thr,
+            df["is_outlier"],
             (df["cpkm"] - mad_thr) * df["total_distance"] * df["executed_load"], 0.0,
         )
-        df["is_outlier"] = df["mad_score"] > mad_cutoff
         logger.info(f"Outliers: {df['is_outlier'].sum()} of {len(df)} rows")
         return df
 
@@ -265,8 +265,10 @@ class MonthlyReportGenerator:
         route_agg = route_agg.merge(out_by_st[["route"] + SUPPLY_TYPES_ORDERED], on="route", how="left")
         route_agg = route_agg.fillna(0)
 
-        # Only show routes with actual MAD cost > 0
-        route_agg = route_agg[route_agg["out_cost_over_mad"] > 0]
+        # Only show routes with actual MAD cost > 0 and at least 1 outlier load
+        route_agg = route_agg[
+            (route_agg["out_cost_over_mad"] > 0) & (route_agg["out_loads"] > 0)
+        ]
         if route_agg.empty:
             return
 
@@ -646,7 +648,7 @@ class MonthlyReportGenerator:
             mad_threshold = median + mad_cutoff * mad / 0.6745
             df_r["mad_score"] = 0.6745 * (df_r[cpkm_column] - median) / mad
             df_r["cost_over_threshold"] = np.where(
-                df_r[cpkm_column] > mad_threshold,
+                df_r["mad_score"] > mad_cutoff,
                 (df_r[cpkm_column] - mad_threshold) * df_r["total_distance"] * df_r["executed_load"],
                 0.0,
             )
@@ -658,12 +660,14 @@ class MonthlyReportGenerator:
             risk = _hhi_risk(route_hhi)
             hhi_color = "#FF6B6B" if risk == "HIGH" else "#FFD93D" if risk == "MOD" else "#6BCB77"
 
-            fig = plt.figure(figsize=(24, 14))
-            gs = fig.add_gridspec(2, 1, height_ratios=[3, 2])
+            fig = plt.figure(figsize=(24, 24))
+            gs = fig.add_gridspec(3, 1, height_ratios=[3, 2.5, 2])
 
             ax_plot = fig.add_subplot(gs[0])
             ax_tables = fig.add_subplot(gs[1])
             ax_tables.axis("off")
+            ax_conc = fig.add_subplot(gs[2])
+            ax_conc.axis("off")
 
             fig.suptitle(
                 f"{title_suffix}\n{route} | "
@@ -671,7 +675,6 @@ class MonthlyReportGenerator:
                 f"  |  HHI: {route_hhi:.3f} ({risk})",
                 fontsize=16, fontweight="bold", y=0.98,
             )
-            # Color the HHI part of the title
             fig.patches.append(plt.Rectangle(
                 (0.82, 0.96), 0.16, 0.035, transform=fig.transFigure,
                 facecolor=hhi_color, alpha=0.3, edgecolor="none",
@@ -691,7 +694,7 @@ class MonthlyReportGenerator:
                             label=f"MAD cutoff ({mad_cutoff})")
             ax_plot.set_xlabel("CPKM"); ax_plot.set_ylabel("Loads")
 
-            # ---- Summary table ----
+            # ---- Summary + outlier tables ----
             nc = df_r["vehicle_carrier"].nunique()
             tl = int(df_r["executed_load"].sum())
             lcr = tl / nc if nc else 0
@@ -707,10 +710,10 @@ class MonthlyReportGenerator:
             ]
             s_tbl = ax_tables.table(
                 cellText=summary, colLabels=["Metric", "Value"],
-                cellLoc="center", loc="center",
+                cellLoc="center", bbox=[0.00, 0.50, 0.40, 0.48],
             )
             _style_table(s_tbl, fontsize=10)
-            s_tbl.scale(1, 1.5)
+            s_tbl.scale(1, 1.4)
 
             # Color HHI row
             hhi_row_idx = len(summary)
@@ -719,6 +722,83 @@ class MonthlyReportGenerator:
                 s_tbl[hhi_row_idx, ci].set_text_props(fontweight="bold")
                 if risk == "HIGH":
                     s_tbl[hhi_row_idx, ci].set_text_props(color="white", fontweight="bold")
+
+            # Outlier detail table (ALL outliers)
+            grp_col = "is_set" if hue_column == "vehicle_carrier" else hue_column
+            if not outliers.empty:
+                ot = (
+                    outliers.groupby(["vehicle_carrier", grp_col])
+                    .agg(Loads=("executed_load", "sum"), AvgMAD=("mad_score", "mean"),
+                         MaxMAD=("mad_score", "max"), Cost=("total_cost", "sum"),
+                         Dist=("total_distance", "sum"),
+                         CostOver=("cost_over_threshold", "sum"))
+                    .sort_values("CostOver", ascending=False)
+                )
+                ot["CPKM"] = np.where(ot["Dist"] > 0, ot["Cost"] / ot["Dist"], np.nan)
+                ot["CPKMOver"] = np.where(ot["Dist"] > 0, ot["CostOver"] / ot["Dist"], np.nan)
+                orows = [
+                    [c, s, int(r.Loads), f"{r.AvgMAD:.2f}", f"{r.MaxMAD:.2f}",
+                     f"{r.Cost:,.0f}", f"{r.Dist:,.0f}", f"{r.CostOver:,.0f}",
+                     f"{r.CPKM:,.2f}", f"{r.CPKMOver:,.2f}"]
+                    for (c, s), r in ot.iterrows()
+                ]
+                no = len(orows)
+                th = min(0.50, 0.05 + no * 0.04)
+                o_tbl = ax_tables.table(
+                    cellText=orows,
+                    colLabels=["Carrier", grp_col, "Loads", "AvgMAD", "MaxMAD",
+                               "Cost", "Dist", "OverMAD", "CPKM", "CPKMOver"],
+                    cellLoc="center", bbox=[0.43, max(0.0, 0.50 - th), 0.57, th + 0.05],
+                )
+                _style_table(o_tbl, fontsize=8)
+                o_tbl.scale(1, 1.2)
+
+            # ---- Carrier concentration table ----
+            df_route_full = df_full[df_full["route"] == route]
+            carrier_st = (
+                df_route_full.groupby(["vehicle_carrier", "supply_type"])["executed_load"]
+                .sum().unstack(fill_value=0).reset_index()
+            )
+            for st in SUPPLY_TYPES_ORDERED:
+                if st not in carrier_st.columns:
+                    carrier_st[st] = 0
+            other_cols = [c for c in carrier_st.columns
+                          if c not in ["vehicle_carrier"] + SUPPLY_TYPES_ORDERED]
+            carrier_st["Other"] = carrier_st[other_cols].sum(axis=1) if other_cols else 0
+            carrier_st["Total"] = carrier_st[SUPPLY_TYPES_ORDERED + ["Other"]].sum(axis=1)
+            grand_total = carrier_st["Total"].sum()
+            carrier_st["Share"] = (carrier_st["Total"] / grand_total * 100) if grand_total > 0 else 0
+            carrier_st = carrier_st.sort_values("Total", ascending=False)
+
+            conc_rows = []
+            for _, cr in carrier_st.iterrows():
+                conc_rows.append([
+                    cr["vehicle_carrier"],
+                    int(cr.get("1.AZNG", 0)), int(cr.get("2.RLB", 0)),
+                    int(cr.get("3.3P", 0)), int(cr.get("Other", 0)),
+                    int(cr["Total"]), f"{cr['Share']:.1f}%",
+                ])
+            # HHI totals row
+            conc_rows.append([
+                f"HHI: {route_hhi:.3f} ({risk})", "", "", "", "",
+                int(grand_total), "100%",
+            ])
+
+            c_tbl = ax_conc.table(
+                cellText=conc_rows,
+                colLabels=["Carrier", "AZNG", "RLB", "3P", "Other", "Total Loads", "Share"],
+                cellLoc="center", loc="center",
+            )
+            _style_table(c_tbl, fontsize=10)
+            c_tbl.scale(1, 1.5)
+
+            # Style HHI totals row
+            hhi_row = len(conc_rows)
+            for ci in range(7):
+                c_tbl[hhi_row, ci].set_text_props(fontweight="bold")
+                c_tbl[hhi_row, ci].set_facecolor(hhi_color)
+                if risk == "HIGH":
+                    c_tbl[hhi_row, ci].set_text_props(color="white", fontweight="bold")
 
             plt.tight_layout(rect=[0, 0.01, 1, 0.96])
             pdf.savefig(fig, bbox_inches="tight")
