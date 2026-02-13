@@ -7,7 +7,7 @@ for OP2 benchmarking.
 
 import pandas as pd
 import numpy as np
-from typing import Tuple, List, Union
+from typing import Tuple
 
 from ..config.settings import (
     COUNTRY_COEFFICIENTS_VOLUME,
@@ -27,7 +27,7 @@ def calculate_op2_carrier_demand_impacts(
     df_carrier: pd.DataFrame,
     compare_year: int,
     report_week: str = None,
-    report_month: Union[str, List[str]] = None,
+    report_month: str = None,
 ) -> Tuple[float, float]:
     """
     Calculate carrier and demand impacts for OP2 weekly bridge.
@@ -46,7 +46,7 @@ def calculate_op2_carrier_demand_impacts(
         | df_carrier       | DF     | Carrier percentage adjustments        |
         | compare_year     | int    | Year for lookup (e.g., 2025)          |
         | report_week      | string | Week identifier (optional)            |
-        | report_month     | str/list| Month identifier(s) (optional)       |
+        | report_month     | string | Month identifier (optional)           |
 
     Input Table - df_carrier:
         | Column     | Type   | Description                    |
@@ -100,29 +100,14 @@ def calculate_op2_carrier_demand_impacts(
     percentage = 0.0
     if period is not None:
         year_str = f"R{compare_year}"
-        # Handle list of periods (for quarterly aggregation)
-        if isinstance(period, list):
-            percentages = []
-            for p in period:
-                lookup_mask = (
-                    (df_carrier["year"] == year_str)
-                    & (df_carrier["period"] == p)
-                    & (df_carrier["country"] == country)
-                )
-                matching_rows = df_carrier[lookup_mask]
-                if not matching_rows.empty:
-                    percentages.append(matching_rows["percentage"].iloc[0])
-            if percentages:
-                percentage = sum(percentages) / len(percentages)
-        else:
-            lookup_mask = (
-                (df_carrier["year"] == year_str)
-                & (df_carrier["period"] == period)
-                & (df_carrier["country"] == country)
-            )
-            matching_rows = df_carrier[lookup_mask]
-            if not matching_rows.empty:
-                percentage = matching_rows["percentage"].iloc[0]
+        lookup_mask = (
+            (df_carrier["year"] == year_str)
+            & (df_carrier["period"] == period)
+            & (df_carrier["country"] == country)
+        )
+        matching_rows = df_carrier[lookup_mask]
+        if not matching_rows.empty:
+            percentage = matching_rows["percentage"].iloc[0]
 
     # Calculate expected executing carriers with percentage adjustment
     actual_expected_carriers = (actual_loads * slope + intercept) * (1 + percentage)
@@ -435,7 +420,7 @@ def calculate_op2_market_rate_impact(
         )
 
         # Delta = YoY actual - OP2 planned
-        out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
+        out["op2_market_impact"] = out["op2_market_impact_raw"] - out["market_rate_impact"].fillna(0)
         return out[["report_year", "report_week", "orig_country", "business", "op2_market_impact"]]
     else:
         op2_agg = merged.groupby(
@@ -457,7 +442,7 @@ def calculate_op2_market_rate_impact(
         )
 
         # Delta = YoY actual - OP2 planned
-        out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
+        out["op2_market_impact"] = out["op2_market_impact_raw"] - out["market_rate_impact"].fillna(0)
         return out[["report_year", "report_week", "orig_country", "op2_market_impact"]]
 
 
@@ -742,7 +727,7 @@ def calculate_op2_market_rate_impact_monthly(
             how="left",
         )
 
-        out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
+        out["op2_market_impact"] = out["op2_market_impact_raw"] - out["market_rate_impact"].fillna(0)
         return out[["report_year", "report_month", "orig_country", "business", "op2_market_impact"]]
     else:
         op2_agg = merged.groupby(
@@ -762,5 +747,5 @@ def calculate_op2_market_rate_impact_monthly(
             how="left",
         )
 
-        out["op2_market_impact"] = out["market_rate_impact"].fillna(0) - out["op2_market_impact_raw"]
+        out["op2_market_impact"] = out["op2_market_impact_raw"] - out["market_rate_impact"].fillna(0)
         return out[["report_year", "report_month", "orig_country", "op2_market_impact"]]

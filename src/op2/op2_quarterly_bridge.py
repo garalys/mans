@@ -88,6 +88,15 @@ def create_op2_quarterly_bridge(
         )
     )
 
+    ##################### MISSING FOR EU LEVEL...... ############
+    #
+    #
+    #
+    #
+    #
+    #
+    #############################################################
+    
     # Calculate carriers per quarter (unique carriers across all months in quarter)
     actual["actual_carriers"] = actual.apply(
         lambda r: df_quarterly[
@@ -232,7 +241,7 @@ def create_op2_quarterly_bridge(
             country=r["orig_country"],
             df_carrier=df_carrier,
             compare_year=int(r["report_year"].replace("R", "")),
-            report_month=QUARTER_TO_MONTHS.get(r["report_quarter"], []),
+            report_month=r["report_quarter"],  # Use quarter as period for lookup
         ),
         axis=1,
         result_type="expand",
@@ -452,7 +461,7 @@ def create_op2_quarterly_country_business_bridge(
             country=r["orig_country"],
             df_carrier=df_carrier,
             compare_year=int(r["report_year"].replace("R", "")),
-            report_month=QUARTER_TO_MONTHS.get(r["report_quarter"], []),
+            report_month=r["report_quarter"],
         ),
         axis=1,
         result_type="expand",
