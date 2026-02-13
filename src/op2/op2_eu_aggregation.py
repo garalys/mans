@@ -427,14 +427,6 @@ def _get_eu_carriers_from_yoy_bridge(
     Aggregates carrier counts from individual EU5 countries for a given business.
 
     Input Table - final_bridge_df:
-        | Column           | Type   | Description                    |
-        |------------------|--------|--------------------------------|
-        | bridge_type      | string | Filter for 'YoY'               |
-        | orig_country     | string | Country code                   |
-        | business         | string | Business unit                  |
-        | report_year      | string | Compare year in R20XX format   |
-        | report_week      | string | Week in WXX format             |
-        | y{YYYY}_carriers | int    | Carrier count for year         |
 
     Output Table:
         | Column          | Type   | Description                     |
@@ -443,45 +435,20 @@ def _get_eu_carriers_from_yoy_bridge(
         | report_week     | string | Week in WXX format              |
         | actual_carriers | int    | Aggregated EU carrier count     |
     """
-    eu_countries = ["DE", "ES", "FR", "IT", "UK"]
 
     # Get YoY bridge rows for EU5 countries and specified business
     yoy_rows = final_bridge_df[
         (final_bridge_df["bridge_type"] == "YoY")
-        & (final_bridge_df["orig_country"].isin(eu_countries))
-        & (final_bridge_df["business"] == business)
+        & (final_bridge_df["orig_country"]== "EU")
+        & (final_bridge_df["business"] == "Total")
     ].copy()
 
-    if yoy_rows.empty:
-        return pd.DataFrame(columns=["report_year", "report_week", "actual_carriers"])
+    results = (
+    yoy_rows[['report_year', 'report_week', 'compare_carriers']]
+    .rename(columns={'compare_carriers': 'actual_carriers'})
+    )
+    logger.info(f"EU AGGREGATION CARRIERS:\n{results.head()}")
 
-    # Extract compare year from bridging_value and get carrier column
-    yoy_rows["compare_year"] = yoy_rows["bridging_value"].str.split("_to_").str[1]
-
-    # Determine carrier column dynamically
-    carrier_cols = [c for c in yoy_rows.columns if c.endswith("_carriers") and c.startswith("y")]
-
-    results = []
-    for (compare_year, week), group in yoy_rows.groupby(["compare_year", "report_week"]):
-        # Find the carrier column for this compare year
-        year_num = compare_year.replace("R", "")
-        carrier_col = f"y{year_num}_carriers"
-
-        if carrier_col in group.columns:
-            total_carriers = group[carrier_col].sum()
-        else:
-            # Fallback: sum any available carrier column
-            total_carriers = 0
-            for col in carrier_cols:
-                if col in group.columns:
-                    total_carriers = group[col].sum()
-                    break
-
-        results.append({
-            "report_year": compare_year,
-            "report_week": week,
-            "actual_carriers": total_carriers,
-        })
 
     return pd.DataFrame(results)
 

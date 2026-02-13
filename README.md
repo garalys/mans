@@ -6,7 +6,6 @@ $AWS_ACCOUNT_ID = "391313099333"
 $ECR_REPO_NAME = "rlb"
 $IMAGE_TAG = "latest"
 
-# Login to ECR
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 
 # Create ECR repository if it doesn't exist

@@ -90,11 +90,13 @@ def compute_op2_normalized_cpkm_weekly(
         .str.replace(r"^\d+\.", "", regex=True)
     )
 
-    # Aggregate actual weekly volumes
+
+    #group columns for op2:
     group_cols = [
         "report_year", "report_week", "orig_country",
-        "dest_country", "business", "distance_band",
+        "dest_country", "business", "distance_band"
     ]
+
     actual = actual_df.groupby(group_cols, as_index=False).agg(
         actual_distance=("distance_for_cpkm", "sum")
     )
@@ -103,7 +105,7 @@ def compute_op2_normalized_cpkm_weekly(
     merged = actual.merge(
         op2[group_cols + ["op2_cpkm"]],
         on=group_cols,
-        how="inner",
+        how="left",
     )
 
     # Calculate normalized cost
@@ -179,7 +181,7 @@ def compute_op2_normalized_cpkm_monthly(
         | business             | string | Business unit                |
     """
     # Prepare OP2 monthly data
-    op2 = df_op2[df_op2["Bridge type"] == "monthly_bridge"].copy()
+    op2 = df_op2[df_op2["Bridge type"] == "monthly"].copy()
 
     op2 = op2.rename(columns={
         "Report Year": "report_year",
@@ -208,11 +210,12 @@ def compute_op2_normalized_cpkm_monthly(
         .str.replace(r"^\d+\.", "", regex=True)
     )
 
-    # Aggregate actual monthly volumes
+    #group columns for op2:
     group_cols = [
         "report_year", "report_month", "orig_country",
-        "dest_country", "business", "distance_band",
+        "dest_country", "business", "distance_band"
     ]
+
     actual = actual_df.groupby(group_cols, as_index=False).agg(
         actual_distance=("distance_for_cpkm", "sum")
     )
@@ -221,7 +224,7 @@ def compute_op2_normalized_cpkm_monthly(
     merged = actual.merge(
         op2[group_cols + ["op2_cpkm"]],
         on=group_cols,
-        how="inner",
+        how="left",
     )
 
     # Calculate normalized cost

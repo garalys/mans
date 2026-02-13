@@ -79,7 +79,7 @@ def get_market_rate_impact_from_yoy(final_bridge_df: pd.DataFrame) -> pd.DataFra
 
     yoy_market_rate_lookup = final_bridge_df[
         (final_bridge_df["bridge_type"] == "YoY")
-        & (final_bridge_df["market_rate_impact"].notna())
+        & (final_bridge_df["set_impact"].notna())
     ][["report_year", "report_week", "orig_country", "business", "market_rate_impact","compare_distance_km"]]
 
     yoy_market_rate_lookup = yoy_market_rate_lookup.copy()
@@ -161,7 +161,7 @@ def get_market_rate_impact_from_mtd(final_bridge_df: pd.DataFrame) -> pd.DataFra
 
     mtd_market_rate_lookup = final_bridge_df[
         (final_bridge_df["bridge_type"] == "MTD")
-        & (final_bridge_df["market_rate_impact"].notna())
+        & (final_bridge_df["set_impact"].notna())
     ]
 
     # Select required columns
