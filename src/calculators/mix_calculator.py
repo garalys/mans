@@ -392,7 +392,6 @@ def compute_mix_impacts(
 
     result = {
         "base_cpkm": base_spend_cpkm,
-        "normalised_cpkm": base_spend_cpkm,
         "country_mix": None,
         "corridor_mix": None,
         "distance_band_mix": None,
@@ -425,6 +424,8 @@ def compute_mix_impacts(
     mix_impact += equipment_type_cpkm
 
     result["mix_impact"] = mix_impact
+    # normalised_cpkm = base_cpkm + all applicable mix components
+    result["normalised_cpkm"] = base_spend_cpkm + mix_impact
 
     return result
 
