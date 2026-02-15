@@ -159,18 +159,6 @@ def create_op2_quarterly_bridge(
     bridge["bridge_type"] = "op2_quarterly"
     bridge["business"] = "Total"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge.get("op2_normalized_cpkm", bridge["op2_base_cpkm"])
-
-    # Commented out - replaced by equipment_type_mix
-    # # Get SET impact (aggregated from monthly)
-    # if "set_impact_sum" in bridge.columns and "norm_distance" in bridge.columns:
-    #     bridge["set_impact"] = np.where(
-    #         bridge["norm_distance"] > 0,
-    #         bridge["set_impact_sum"] / bridge["norm_distance"],
-    #         0,
-    #     )
-    # else:
-    #     bridge["set_impact"] = None
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -200,14 +188,6 @@ def create_op2_quarterly_bridge(
         ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
         0,
     )
-
-    # Normalized metrics
-    if "op2_normalized_cpkm" in bridge.columns:
-        bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-        bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
-    else:
-        bridge["normalized_variance"] = 0
-        bridge["mix_impact"] = 0
 
     # Calculate per-km impacts
     if "op2_tech_impact_value" in bridge.columns:
@@ -322,6 +302,11 @@ def _aggregate_quarterly_mix_from_monthly(
         bridge[mix_col] = bridge_merged[mix_col].values
 
         monthly_op2.drop(columns=[f"{mix_col}_weighted"], inplace=True)
+
+    # mix_impact = sum of individual mix columns; normalised_cpkm = base_cpkm + mix_impact
+    mix_sum = bridge[available_mix].fillna(0).sum(axis=1)
+    bridge["mix_impact"] = mix_sum
+    bridge["normalised_cpkm"] = bridge["base_cpkm"] + mix_sum
 
 
 def create_op2_quarterly_country_business_bridge(
@@ -446,18 +431,6 @@ def create_op2_quarterly_country_business_bridge(
     # Fill bridge schema
     bridge["bridge_type"] = "op2_quarterly"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge.get("op2_normalized_cpkm", bridge["op2_base_cpkm"])
-
-    # Commented out - replaced by equipment_type_mix
-    # # SET impact
-    # if "set_impact_sum" in bridge.columns and "norm_distance" in bridge.columns:
-    #     bridge["set_impact"] = np.where(
-    #         bridge["norm_distance"] > 0,
-    #         bridge["set_impact_sum"] / bridge["norm_distance"],
-    #         0,
-    #     )
-    # else:
-    #     bridge["set_impact"] = None
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -487,14 +460,6 @@ def create_op2_quarterly_country_business_bridge(
         ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
         0,
     )
-
-    # Normalized metrics
-    if "op2_normalized_cpkm" in bridge.columns:
-        bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-        bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
-    else:
-        bridge["normalized_variance"] = 0
-        bridge["mix_impact"] = 0
 
     # Per-km impacts
     if "op2_tech_impact_value" in bridge.columns:

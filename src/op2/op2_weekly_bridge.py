@@ -132,19 +132,6 @@ def create_op2_weekly_bridge(
     bridge["bridge_type"] = "op2_weekly"
     bridge["business"] = "Total"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
-
-    # GET SET impact from YoY bridge - commented out, replaced by equipment_type_mix
-    # yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
-    # yoy_set_impact = yoy_set_impact[["report_year", "report_week", "orig_country", "business", "set_impact"]].copy()
-    # for col in ["report_year", "report_week", "orig_country", "business"]:
-    #     bridge[col] = bridge[col].astype(str)
-    #     yoy_set_impact[col] = yoy_set_impact[col].astype(str)
-    # bridge = bridge.merge(
-    #     yoy_set_impact,
-    #     on=["report_year", "report_week", "orig_country", "business"],
-    #     how="left",
-    # )
 
     # Ensure dtypes are strings for consistency
     for col in ["report_year", "report_week", "orig_country", "business"]:
@@ -159,10 +146,6 @@ def create_op2_weekly_bridge(
 
     bridge["cost_variance_mm"] = (bridge["actual_cost"] - bridge["op2_base_cost"]) / 1_000_000
     bridge["cost_variance_pct"] = ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100
-
-    # Normalized metrics
-    bridge["compare_cpkm_vs_normalised_op2_cpkm"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     bridge["tech_impact"] = np.where(
         bridge["actual_distance_km"] > 0,
@@ -338,6 +321,11 @@ def _compute_op2_mix_decomposition(
             if mix_results.get(mix_col) is not None:
                 bridge.loc[mask, mix_col] = mix_results[mix_col]
 
+        # mix_impact = sum of individual mix columns; normalised_cpkm = base_cpkm + mix_impact
+        if mix_results.get("mix_impact") is not None:
+            bridge.loc[mask, "mix_impact"] = mix_results["mix_impact"]
+            bridge.loc[mask, "normalised_cpkm"] = bridge.loc[mask, "base_cpkm"] + mix_results["mix_impact"]
+
 
 def create_op2_weekly_country_business_bridge(
     df: pd.DataFrame,
@@ -405,21 +393,6 @@ def create_op2_weekly_country_business_bridge(
     bridge["bridge_type"] = "op2_weekly"
     bridge["business"] = bridge["business"].fillna("UNKNOWN")
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
-
-    # GET SET impact from YoY bridge - commented out, replaced by equipment_type_mix
-    # yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
-    # set_impact_cols = ["report_year", "report_week", "orig_country", "business", "set_impact"]
-    # yoy_set_impact = yoy_set_impact[[c for c in set_impact_cols if c in yoy_set_impact.columns]].copy()
-    # for col in ["report_year", "report_week", "orig_country", "business"]:
-    #     bridge[col] = bridge[col].astype(str)
-    #     if col in yoy_set_impact.columns:
-    #         yoy_set_impact[col] = yoy_set_impact[col].astype(str)
-    # bridge = bridge.merge(
-    #     yoy_set_impact,
-    #     on=["report_year", "report_week", "orig_country", "business"],
-    #     how="left",
-    # )
 
     # Calculate variance metrics using np.where to handle missing values
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -442,9 +415,6 @@ def create_op2_weekly_country_business_bridge(
         ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
         0,
     )
-
-    bridge["compare_cpkm_vs_normalised_op2_cpkm"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     bridge["tech_impact"] = np.where(
         bridge["actual_distance_km"] > 0,

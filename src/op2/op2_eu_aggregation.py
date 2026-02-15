@@ -144,7 +144,7 @@ def create_op2_eu_weekly_bridge(
     bridge["business"] = "Total"
     bridge["orig_country"] = "EU"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
+    # normalised_cpkm and mix_impact set by mix decomposition
 
     # Commented out - replaced by equipment_type_mix
     # # Get SET impact from YoY bridge for EU Total
@@ -171,7 +171,7 @@ def create_op2_eu_weekly_bridge(
 
     # Normalized metrics
     bridge["compare_cpkm_vs_normalised_op2_cpkm"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
+    # mix_impact set by mix decomposition (sum of individual mix columns)
 
     bridge["tech_impact"] = np.where(
         bridge["actual_distance_km"] > 0,
@@ -355,7 +355,7 @@ def create_op2_eu_weekly_business_bridge(
     bridge["bridge_type"] = "op2_weekly"
     bridge["orig_country"] = "EU"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
+    # normalised_cpkm and mix_impact set by mix decomposition
 
     # Commented out - replaced by equipment_type_mix
     # # Get SET impact from YoY bridge for EU by business
@@ -391,7 +391,7 @@ def create_op2_eu_weekly_business_bridge(
 
     # Normalized metrics
     bridge["compare_cpkm_vs_normalised_op2_cpkm"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
+    # mix_impact set by mix decomposition (sum of individual mix columns)
 
     bridge["tech_impact"] = np.where(
         bridge["actual_distance_km"] > 0,
@@ -744,7 +744,7 @@ def create_op2_eu_monthly_bridge(
     bridge["business"] = "Total"
     bridge["orig_country"] = "EU"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
+    # normalised_cpkm and mix_impact set by mix decomposition
 
     # Commented out - replaced by equipment_type_mix
     # # Get SET impact from MTD bridge for EU Total
@@ -789,8 +789,7 @@ def create_op2_eu_monthly_bridge(
     )
 
     # Normalized metrics
-    bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
+    # mix_impact and normalised_cpkm set by mix decomposition
 
     # Calculate per-km impacts
     bridge["tech_impact"] = np.where(
@@ -981,7 +980,7 @@ def create_op2_eu_monthly_business_bridge(
     bridge["bridge_type"] = "op2_monthly"
     bridge["orig_country"] = "EU"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
+    # normalised_cpkm and mix_impact set by mix decomposition
 
     # Populate OP2 columns
     bridge["op2_loads"] = bridge["op2_base_loads"]
@@ -1019,8 +1018,7 @@ def create_op2_eu_monthly_business_bridge(
     )
 
     # Normalized metrics
-    bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
+    # mix_impact and normalised_cpkm set by mix decomposition
 
     # Commented out - replaced by equipment_type_mix
     # # Get SET impact from MTD bridge for EU by business
@@ -1220,7 +1218,7 @@ def create_op2_eu_quarterly_bridge(
     bridge["business"] = "Total"
     bridge["orig_country"] = "EU"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge.get("op2_normalized_cpkm", bridge["op2_base_cpkm"])
+    # normalised_cpkm and mix_impact set by mix decomposition
 
     # Commented out - replaced by equipment_type_mix
     # # SET impact
@@ -1261,14 +1259,6 @@ def create_op2_eu_quarterly_bridge(
         ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
         0,
     )
-
-    # Normalized metrics
-    if "op2_normalized_cpkm" in bridge.columns:
-        bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-        bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
-    else:
-        bridge["normalized_variance"] = 0
-        bridge["mix_impact"] = 0
 
     # Per-km impacts
     if "op2_tech_impact_value" in bridge.columns:
@@ -1454,7 +1444,7 @@ def create_op2_eu_quarterly_business_bridge(
     bridge["bridge_type"] = "op2_quarterly"
     bridge["orig_country"] = "EU"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge.get("op2_normalized_cpkm", bridge["op2_base_cpkm"])
+    # normalised_cpkm and mix_impact set by mix decomposition
 
     # Commented out - replaced by equipment_type_mix
     # # SET impact
@@ -1495,14 +1485,6 @@ def create_op2_eu_quarterly_business_bridge(
         ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
         0,
     )
-
-    # Normalized metrics
-    if "op2_normalized_cpkm" in bridge.columns:
-        bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-        bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
-    else:
-        bridge["normalized_variance"] = 0
-        bridge["mix_impact"] = 0
 
     # Per-km impacts
     if "op2_tech_impact_value" in bridge.columns:
@@ -1678,3 +1660,8 @@ def _compute_op2_eu_mix_decomposition(
         for mix_col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:
             if mix_results.get(mix_col) is not None:
                 bridge.loc[mask, mix_col] = mix_results[mix_col]
+
+        # mix_impact = sum of individual mix columns; normalised_cpkm = base_cpkm + mix_impact
+        if mix_results.get("mix_impact") is not None:
+            bridge.loc[mask, "mix_impact"] = mix_results["mix_impact"]
+            bridge.loc[mask, "normalised_cpkm"] = bridge.loc[mask, "base_cpkm"] + mix_results["mix_impact"]

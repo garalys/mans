@@ -110,16 +110,6 @@ def create_op2_monthly_bridge(
     bridge["bridge_type"] = "op2_monthly"
     bridge["business"] = "Total"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
-
-    # GET SET impact from MTD bridge - commented out, replaced by equipment_type_mix
-    # mtd_set_impact = get_set_impact_for_op2_monthly(final_bridge_df)
-    # mtd_set_impact = mtd_set_impact[mtd_set_impact["business"] == "Total"]
-    # bridge = bridge.merge(
-    #     mtd_set_impact[["report_year", "report_month", "orig_country", "set_impact"]],
-    #     on=["report_year", "report_month", "orig_country"],
-    #     how="left",
-    # )
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -149,10 +139,6 @@ def create_op2_monthly_bridge(
         ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
         0,
     )
-
-    # Normalized metrics
-    bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     # Calculate per-km impacts
     bridge["tech_impact"] = np.where(
@@ -198,7 +184,7 @@ def create_op2_monthly_bridge(
     for col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:
         bridge[col] = None
 
-    # Compute hierarchical mix decomposition per (year, month, country)
+    # Compute hierarchical mix decomposition — sets mix columns, mix_impact, normalised_cpkm
     from .op2_weekly_bridge import _compute_op2_mix_decomposition
     _compute_op2_mix_decomposition(df, df_op2, bridge, time_col="report_month", bridge_type_filter="monthly")
 
@@ -274,16 +260,6 @@ def create_op2_monthly_country_business_bridge(
     # Fill bridge schema
     bridge["bridge_type"] = "op2_monthly"
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
-    bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
-
-    # GET SET impact from MTD bridge - commented out, replaced by equipment_type_mix
-    # mtd_set_impact = get_set_impact_for_op2_monthly(final_bridge_df)
-    # mtd_set_impact["business"] = mtd_set_impact["business"].str.upper()
-    # bridge = bridge.merge(
-    #     mtd_set_impact[["report_year", "report_month", "orig_country", "business", "set_impact"]],
-    #     on=["report_year", "report_month", "orig_country", "business"],
-    #     how="left",
-    # )
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -313,10 +289,6 @@ def create_op2_monthly_country_business_bridge(
         ((bridge["actual_cost"] - bridge["op2_base_cost"]) / bridge["op2_base_cost"]) * 100,
         0,
     )
-
-    # Normalized metrics
-    bridge["normalized_variance"] = bridge["compare_cpkm"] - bridge["op2_normalized_cpkm"]
-    bridge["mix_impact"] = bridge["op2_normalized_cpkm"] - bridge["op2_base_cpkm"]
 
     # Calculate per-km impacts
     bridge["tech_impact"] = np.where(
