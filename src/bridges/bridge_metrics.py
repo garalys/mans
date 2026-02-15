@@ -19,7 +19,14 @@ from ..calculators.carrier_calculator import (
     calculate_active_carriers,
     calculate_carrier_demand_impacts,
 )
-from ..calculators.set_impact_calculator import calculate_set_impact
+from ..calculators.mix_calculator import (
+    compute_hierarchical_mix,
+    compute_normalised_distance,
+    compute_seven_metrics,
+    compute_mix_impacts,
+    compute_cell_cpkm,
+)
+# from ..calculators.set_impact_calculator import calculate_set_impact  # Commented out - replaced by equipment_type_mix
 
 
 def calculate_detailed_bridge_metrics(
@@ -31,6 +38,7 @@ def calculate_detailed_bridge_metrics(
     df_carrier: pd.DataFrame,
     report_week: Optional[str] = None,
     report_month: Optional[str] = None,
+    bridge_type: str = "YoY",
 ) -> Dict[str, Any]:
     """
     Calculate detailed metrics for bridge visualization.
@@ -131,11 +139,33 @@ def calculate_detailed_bridge_metrics(
 
     # Calculate bridge components if we have valid data
     if base_dist > 0 and compare_dist > 0:
-        # Mix Impact
-        normalized_cost = calculate_normalized_cost(base_data, compare_data)
-        mix_impact = (normalized_cost / compare_dist) - base_cpkm
-        metrics["mix_impact"] = mix_impact
-        metrics["normalised_cpkm"] = normalized_cost / compare_dist
+        # Hierarchical Mix Impact
+        base_mix = compute_hierarchical_mix(base_data)
+        compare_mix = compute_hierarchical_mix(compare_data)
+        norm_dist = compute_normalised_distance(base_mix, compare_mix)
+        base_cpkm_cells = compute_cell_cpkm(base_data)
+        compare_cpkm_cells = compute_cell_cpkm(compare_data)
+
+        seven = compute_seven_metrics(
+            base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
+        )
+
+        # Determine aggregation level based on country
+        agg_level = "country" if country != "EU" else "eu"
+
+        mix_results = compute_mix_impacts(
+            seven, compare_dist,
+            bridge_level="business",  # business-level bridges (called per-business)
+            aggregation_level=agg_level,
+        )
+
+        metrics["mix_impact"] = mix_results["mix_impact"]
+        metrics["normalised_cpkm"] = mix_results["normalised_cpkm"]
+        metrics["country_mix"] = mix_results["country_mix"]
+        metrics["corridor_mix"] = mix_results["corridor_mix"]
+        metrics["distance_band_mix"] = mix_results["distance_band_mix"]
+        metrics["business_flow_mix"] = mix_results["business_flow_mix"]
+        metrics["equipment_type_mix"] = mix_results["equipment_type_mix"]
 
         # Market Rate Impact
         if base_data["distance_for_cpkm"].sum() > 0 and compare_data["distance_for_cpkm"].sum() > 0:
@@ -170,15 +200,28 @@ def calculate_detailed_bridge_metrics(
             metrics["carrier_impact"] = 0.0
             metrics["demand_impact"] = 0.0
 
-        # SET Impact
-        set_impact = calculate_set_impact(base_data, compare_data)
-        metrics["set_impact"] = set_impact / compare_dist if compare_dist > 0 else None
+        # SET Impact - commented out, replaced by equipment_type_mix
+        # set_impact = calculate_set_impact(base_data, compare_data)
+        # metrics["set_impact"] = set_impact / compare_dist if compare_dist > 0 else None
 
         # Tech Impact
-        week_num = int(base_data["report_week"].iloc[0].replace("W", "")) if not base_data.empty else 0
-        tech_rate = get_tech_savings_rate(compare_year, week_num)
-        tech_impact = compare_cpkm * tech_rate if compare_cpkm is not None else 0.0
-        metrics["tech_impact"] = tech_impact
+        if bridge_type == "WoW" and not base_data.empty and not compare_data.empty:
+            # WoW: tech impact only when tech percentages change
+            base_week_num = int(base_data["report_week"].iloc[0].replace("W", ""))
+            compare_week_num = int(compare_data["report_week"].iloc[0].replace("W", ""))
+            base_tech_pct = get_tech_savings_rate(base_year, base_week_num)
+            compare_tech_pct = get_tech_savings_rate(compare_year, compare_week_num)
+
+            if base_tech_pct == compare_tech_pct:
+                metrics["tech_impact"] = 0.0
+            else:
+                # previous_week_cpkm * (this_week_tech_pct - previous_week_tech_pct)
+                metrics["tech_impact"] = base_cpkm * (compare_tech_pct - base_tech_pct) if base_cpkm else 0.0
+        else:
+            week_num = int(base_data["report_week"].iloc[0].replace("W", "")) if not base_data.empty else 0
+            tech_rate = get_tech_savings_rate(compare_year, week_num)
+            tech_impact = compare_cpkm * tech_rate if compare_cpkm is not None else 0.0
+            metrics["tech_impact"] = tech_impact
 
     else:
         # No valid data - set all impacts to None
@@ -191,7 +234,7 @@ def calculate_detailed_bridge_metrics(
             "demand_impact": None,
             "premium_impact": None,
             "market_rate_impact": None,
-            "set_impact": None,
+            # "set_impact": None,  # Commented out - replaced by equipment_type_mix
             "tech_impact": None,
         })
 

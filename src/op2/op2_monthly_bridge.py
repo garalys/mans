@@ -10,6 +10,14 @@ import numpy as np
 
 from ..config.logging_config import logger
 from ..calculators.carrier_calculator import calculate_active_carriers
+from ..calculators.mix_calculator import (
+    compute_hierarchical_mix,
+    compute_normalised_distance,
+    compute_seven_metrics,
+    compute_mix_impacts,
+    compute_cell_cpkm,
+    compute_op2_cell_cpkm,
+)
 from .op2_data_extractor import extract_op2_monthly_base_cpkm, extract_op2_monthly_base_by_business
 from .op2_normalizer import compute_op2_normalized_cpkm_monthly
 from .op2_impacts import (
@@ -17,7 +25,7 @@ from .op2_impacts import (
     calculate_op2_tech_impact_monthly,
     calculate_op2_market_rate_impact_monthly,
 )
-from .op2_helpers import get_set_impact_for_op2_monthly
+# from .op2_helpers import get_set_impact_for_op2_monthly  # Commented out - replaced by equipment_type_mix
 
 
 def create_op2_monthly_bridge(
@@ -104,14 +112,14 @@ def create_op2_monthly_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
-    # Get SET impact from MTD bridge
-    mtd_set_impact = get_set_impact_for_op2_monthly(final_bridge_df)
-    mtd_set_impact = mtd_set_impact[mtd_set_impact["business"] == "Total"]
-    bridge = bridge.merge(
-        mtd_set_impact[["report_year", "report_month", "orig_country", "set_impact"]],
-        on=["report_year", "report_month", "orig_country"],
-        how="left",
-    )
+    # GET SET impact from MTD bridge - commented out, replaced by equipment_type_mix
+    # mtd_set_impact = get_set_impact_for_op2_monthly(final_bridge_df)
+    # mtd_set_impact = mtd_set_impact[mtd_set_impact["business"] == "Total"]
+    # bridge = bridge.merge(
+    #     mtd_set_impact[["report_year", "report_month", "orig_country", "set_impact"]],
+    #     on=["report_year", "report_month", "orig_country"],
+    #     how="left",
+    # )
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -185,6 +193,14 @@ def create_op2_monthly_bridge(
     # Null out non-applicable fields
     for col in ["premium_impact", "supply_rates", "report_week"]:
         bridge[col] = None
+
+    # Initialize hierarchical mix columns
+    for col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:
+        bridge[col] = None
+
+    # Compute hierarchical mix decomposition per (year, month, country)
+    from .op2_weekly_bridge import _compute_op2_mix_decomposition
+    _compute_op2_mix_decomposition(df, df_op2, bridge, time_col="report_month", bridge_type_filter="monthly")
 
     logger.info(f"Created {len(bridge)} OP2 country-total monthly bridge rows")
     return bridge
@@ -260,14 +276,14 @@ def create_op2_monthly_country_business_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
-    # Get SET impact from MTD bridge
-    mtd_set_impact = get_set_impact_for_op2_monthly(final_bridge_df)
-    mtd_set_impact["business"] = mtd_set_impact["business"].str.upper()
-    bridge = bridge.merge(
-        mtd_set_impact[["report_year", "report_month", "orig_country", "business", "set_impact"]],
-        on=["report_year", "report_month", "orig_country", "business"],
-        how="left",
-    )
+    # GET SET impact from MTD bridge - commented out, replaced by equipment_type_mix
+    # mtd_set_impact = get_set_impact_for_op2_monthly(final_bridge_df)
+    # mtd_set_impact["business"] = mtd_set_impact["business"].str.upper()
+    # bridge = bridge.merge(
+    #     mtd_set_impact[["report_year", "report_month", "orig_country", "business", "set_impact"]],
+    #     on=["report_year", "report_month", "orig_country", "business"],
+    #     how="left",
+    # )
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -341,6 +357,14 @@ def create_op2_monthly_country_business_bridge(
     # Null out non-applicable fields
     for col in ["premium_impact", "supply_rates", "report_week"]:
         bridge[col] = None
+
+    # Initialize hierarchical mix columns
+    for col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:
+        bridge[col] = None
+
+    # Compute hierarchical mix decomposition per (year, month, country)
+    from .op2_weekly_bridge import _compute_op2_mix_decomposition
+    _compute_op2_mix_decomposition(df, df_op2, bridge, time_col="report_month", bridge_type_filter="monthly")
 
     logger.info(f"Created {len(bridge)} OP2 country x business monthly bridge rows")
     return bridge

@@ -17,7 +17,14 @@ from ..config.settings import (
 from ..calculators.carrier_calculator import calculate_active_carriers
 from ..calculators.normalized_cost_calculator import calculate_normalized_cost
 from ..calculators.market_rate_calculator import calculate_market_rate_impact
-from ..calculators.set_impact_calculator import calculate_set_impact
+from ..calculators.mix_calculator import (
+    compute_hierarchical_mix,
+    compute_normalised_distance,
+    compute_seven_metrics,
+    compute_mix_impacts,
+    compute_cell_cpkm,
+)
+# from ..calculators.set_impact_calculator import calculate_set_impact  # Commented out - replaced by equipment_type_mix
 
 
 def calculate_eu_aggregated_metrics(
@@ -290,47 +297,42 @@ def _calculate_eu_impacts(
     """Calculate impact components for EU aggregation."""
     impact_updates = {}
 
-    # Calculate mix impact across countries
-    normalized_costs_total = 0
+    # Hierarchical Mix Impact (EU level)
     business_data = {
         "base": base_data[base_data["business"] == business],
         "compare": compare_data[compare_data["business"] == business],
     }
 
-    for country in ["DE", "ES", "FR", "IT", "UK"]:
-        country_data = {
-            "base": business_data["base"][business_data["base"]["orig_country"] == country],
-            "compare": business_data["compare"][business_data["compare"]["orig_country"] == country],
-        }
+    base_mix = compute_hierarchical_mix(business_data["base"])
+    compare_mix = compute_hierarchical_mix(business_data["compare"])
+    norm_dist = compute_normalised_distance(base_mix, compare_mix)
+    base_cpkm_cells = compute_cell_cpkm(business_data["base"])
+    compare_cpkm_cells = compute_cell_cpkm(business_data["compare"])
 
-        if not country_data["base"].empty and not country_data["compare"].empty:
-            base_grouped = country_data["base"].groupby(
-                ["dest_country", "distance_band", "is_set"]
-            ).agg({"distance_for_cpkm": "sum", "total_cost_usd": "sum"}).reset_index()
+    seven = compute_seven_metrics(
+        base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
+    )
 
-            compare_grouped = country_data["compare"].groupby(
-                ["dest_country", "distance_band", "is_set"]
-            ).agg({"distance_for_cpkm": "sum"}).reset_index()
+    mix_results = compute_mix_impacts(
+        seven, metrics["distance_km"],
+        bridge_level="business",  # EU business-level
+        aggregation_level="eu",
+    )
 
-            normalized_cost = calculate_normalized_cost(base_grouped, compare_grouped)
-            normalized_costs_total += normalized_cost
-
-    # Mix impact
-    mix_impact = (normalized_costs_total / metrics["distance_km"]) - metrics["base_cpkm"]
-
-    # Use business-filtered data for market rate and SET impacts
+    # Use business-filtered data for market rate impact
     market_rate_impact = calculate_market_rate_impact(
         business_data["base"], business_data["compare"], "EU"
     )
-    set_impact = calculate_set_impact(
-        business_data["base"], business_data["compare"]
-    ) / metrics["distance_km"]
 
     impact_updates.update({
-        "mix_impact": mix_impact,
-        "normalised_cpkm": normalized_costs_total / metrics["distance_km"],
+        "mix_impact": mix_results["mix_impact"],
+        "normalised_cpkm": mix_results["normalised_cpkm"],
+        "country_mix": mix_results["country_mix"],
+        "corridor_mix": mix_results["corridor_mix"],
+        "distance_band_mix": mix_results["distance_band_mix"],
+        "business_flow_mix": mix_results["business_flow_mix"],
+        "equipment_type_mix": mix_results["equipment_type_mix"],
         "market_rate_impact": market_rate_impact,
-        "set_impact": set_impact,
     })
 
     # Carrier and demand impacts

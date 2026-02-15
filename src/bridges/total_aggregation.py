@@ -18,7 +18,14 @@ from ..config.logging_config import logger
 from ..calculators.carrier_calculator import calculate_active_carriers
 from ..calculators.normalized_cost_calculator import calculate_normalized_cost
 from ..calculators.market_rate_calculator import calculate_market_rate_impact
-from ..calculators.set_impact_calculator import calculate_set_impact
+from ..calculators.mix_calculator import (
+    compute_hierarchical_mix,
+    compute_normalised_distance,
+    compute_seven_metrics,
+    compute_mix_impacts,
+    compute_cell_cpkm,
+)
+# from ..calculators.set_impact_calculator import calculate_set_impact  # Commented out - replaced by equipment_type_mix
 
 
 def calculate_total_aggregated_metrics(
@@ -302,30 +309,34 @@ def _update_bridge_with_total_metrics(
     if metrics["base_cpkm"] is not None and metrics["cpkm"] is not None:
         country = bridge_df.loc[idx, "orig_country"]
 
-        # Calculate mix impact across businesses
-        normalized_costs_total = 0
-        businesses = sorted(base_data["business"].unique())
+        # Hierarchical Mix Impact (total level = across all businesses)
+        base_filtered = base_data if country == "EU" else base_data[base_data["orig_country"] == country]
+        compare_filtered = compare_data if country == "EU" else compare_data[compare_data["orig_country"] == country]
 
-        for business in businesses:
-            base_business = base_data[base_data["business"] == business]
-            compare_business = compare_data[compare_data["business"] == business]
+        base_mix = compute_hierarchical_mix(base_filtered)
+        compare_mix = compute_hierarchical_mix(compare_filtered)
+        norm_dist = compute_normalised_distance(base_mix, compare_mix)
+        base_cpkm_cells = compute_cell_cpkm(base_filtered)
+        compare_cpkm_cells = compute_cell_cpkm(compare_filtered)
 
-            if country != "EU":
-                base_business = base_business[base_business["orig_country"] == country]
-                compare_business = compare_business[compare_business["orig_country"] == country]
+        seven = compute_seven_metrics(
+            base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
+        )
 
-            normalized_cost = calculate_normalized_cost(base_business, compare_business)
-            normalized_costs_total += normalized_cost
+        agg_level = "country" if country != "EU" else "eu"
+        mix_results = compute_mix_impacts(
+            seven, metrics["distance_km"],
+            bridge_level="total",
+            aggregation_level=agg_level,
+        )
 
-        mix_impact = (normalized_costs_total / metrics["distance_km"]) - metrics["base_cpkm"]
-        bridge_df.loc[idx, ["mix_impact", "normalised_cpkm"]] = [
-            mix_impact,
-            normalized_costs_total / metrics["distance_km"],
-        ]
-
-        # SET impact
-        set_impact = calculate_set_impact(base_data, compare_data) / metrics["distance_km"]
-        bridge_df.loc[idx, "set_impact"] = set_impact
+        bridge_df.loc[idx, "mix_impact"] = mix_results["mix_impact"]
+        bridge_df.loc[idx, "normalised_cpkm"] = mix_results["normalised_cpkm"]
+        bridge_df.loc[idx, "country_mix"] = mix_results["country_mix"]
+        bridge_df.loc[idx, "corridor_mix"] = mix_results["corridor_mix"]
+        bridge_df.loc[idx, "distance_band_mix"] = mix_results["distance_band_mix"]
+        bridge_df.loc[idx, "business_flow_mix"] = mix_results["business_flow_mix"]
+        bridge_df.loc[idx, "equipment_type_mix"] = mix_results["equipment_type_mix"]
 
         # Carrier and demand impacts
         if metrics["carriers"] > 0 and metrics["base_carriers"] > 0:

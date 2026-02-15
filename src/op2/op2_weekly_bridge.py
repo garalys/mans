@@ -9,6 +9,14 @@ import numpy as np
 
 from ..config.logging_config import logger
 from ..calculators.carrier_calculator import calculate_active_carriers
+from ..calculators.mix_calculator import (
+    compute_hierarchical_mix,
+    compute_normalised_distance,
+    compute_seven_metrics,
+    compute_mix_impacts,
+    compute_cell_cpkm,
+    compute_op2_cell_cpkm,
+)
 from .op2_data_extractor import extract_op2_weekly_base_cpkm, extract_op2_weekly_base_by_business
 from .op2_normalizer import compute_op2_normalized_cpkm_weekly
 from .op2_impacts import (
@@ -16,7 +24,7 @@ from .op2_impacts import (
     calculate_op2_tech_impact,
     calculate_op2_market_rate_impact,
 )
-from .op2_helpers import get_set_impact_for_op2
+# from .op2_helpers import get_set_impact_for_op2  # Commented out - replaced by equipment_type_mix
 
 
 def create_op2_weekly_bridge(
@@ -126,20 +134,21 @@ def create_op2_weekly_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
-    # Get SET impact from YoY bridge
-    yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
-    yoy_set_impact = yoy_set_impact[["report_year", "report_week", "orig_country", "business", "set_impact"]].copy()
+    # GET SET impact from YoY bridge - commented out, replaced by equipment_type_mix
+    # yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
+    # yoy_set_impact = yoy_set_impact[["report_year", "report_week", "orig_country", "business", "set_impact"]].copy()
+    # for col in ["report_year", "report_week", "orig_country", "business"]:
+    #     bridge[col] = bridge[col].astype(str)
+    #     yoy_set_impact[col] = yoy_set_impact[col].astype(str)
+    # bridge = bridge.merge(
+    #     yoy_set_impact,
+    #     on=["report_year", "report_week", "orig_country", "business"],
+    #     how="left",
+    # )
 
-    # Ensure dtypes match for merge
+    # Ensure dtypes are strings for consistency
     for col in ["report_year", "report_week", "orig_country", "business"]:
         bridge[col] = bridge[col].astype(str)
-        yoy_set_impact[col] = yoy_set_impact[col].astype(str)
-
-    bridge = bridge.merge(
-        yoy_set_impact,
-        on=["report_year", "report_week", "orig_country", "business"],
-        how="left",
-    )
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -194,7 +203,140 @@ def create_op2_weekly_bridge(
     for col in ["premium_impact", "supply_rates", "op2_active_carriers", "op2_lcr"]:
         bridge[col] = None
 
+    # Initialize hierarchical mix columns
+    # OP2 mix decomposition: country_mix through business_flow_mix from OP2 granular;
+    # equipment_type_mix from YoY bridge (per plan)
+    for col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:
+        bridge[col] = None
+
+    # Compute hierarchical mix decomposition per (year, week, country)
+    _compute_op2_mix_decomposition(df, df_op2, bridge, time_col="report_week", bridge_type_filter="weekly")
+
     return bridge
+
+
+def _compute_op2_mix_decomposition(
+    df: pd.DataFrame,
+    df_op2: pd.DataFrame,
+    bridge: pd.DataFrame,
+    time_col: str = "report_week",
+    bridge_type_filter: str = "weekly",
+) -> None:
+    """
+    Compute hierarchical mix decomposition for OP2 bridges (in-place).
+
+    Base mix comes from OP2 granular data (with is_op2_base=True, hardcoding
+    RET=100%, SET=0%). Compare mix comes from actual data.
+
+    Updates bridge DataFrame in-place with:
+        country_mix, corridor_mix, distance_band_mix, business_flow_mix, equipment_type_mix
+    """
+    # Determine the OP2 bridge type filter and column mapping
+    if bridge_type_filter == "weekly":
+        op2_type = "weekly"
+        op2_time_col_raw = "Week"
+        op2_time_col = "report_week"
+    else:  # monthly
+        op2_type = "monthly_bridge"
+        op2_time_col_raw = "Report Month"
+        op2_time_col = "report_month"
+
+    # Extract OP2 granular data
+    op2 = df_op2[df_op2["Bridge type"] == op2_type].copy()
+    if op2.empty:
+        return
+
+    op2 = op2.rename(columns={
+        "Report Year": "report_year",
+        op2_time_col_raw: op2_time_col,
+        "Orig_EU5": "orig_country",
+        "Dest_EU5": "dest_country",
+        "Business Flow": "business",
+        "Distance Band": "distance_band",
+        "CpKM": "op2_cpkm",
+        "Distance": "distance_for_cpkm",
+    })
+
+    for col in ["report_year", op2_time_col, "orig_country", "dest_country", "business", "distance_band"]:
+        op2[col] = op2[col].astype(str)
+    op2["business"] = op2["business"].str.upper()
+
+    # Prepare actual data
+    actual_df = df.copy()
+    actual_df["business"] = actual_df["business"].str.upper()
+    actual_df["report_year"] = actual_df["report_year"].astype(str)
+    actual_df["distance_band"] = (
+        actual_df["distance_band"]
+        .astype(str)
+        .str.strip()
+        .str.replace(r"^\d+\.", "", regex=True)
+    )
+
+    # Determine if bridge is at total or business level
+    is_total = "Total" in bridge["business"].values
+
+    # Iterate over each unique (year, time_period, country) in bridge
+    for _, grp in bridge.groupby(["report_year", time_col, "orig_country"]):
+        year = grp["report_year"].iloc[0]
+        period = grp[time_col].iloc[0]
+        country = grp["orig_country"].iloc[0]
+
+        # Get OP2 data for this period/country (base)
+        op2_slice = op2[
+            (op2["report_year"] == year)
+            & (op2[op2_time_col] == period)
+            & (op2["orig_country"] == country)
+        ]
+
+        # Get actual data for this period/country (compare)
+        actual_slice = actual_df[
+            (actual_df["report_year"] == year)
+            & (actual_df[time_col] == period)
+            & (actual_df["orig_country"] == country)
+        ]
+
+        if op2_slice.empty or actual_slice.empty:
+            continue
+
+        # Compute hierarchical mixes
+        base_mix = compute_hierarchical_mix(op2_slice, distance_col="distance_for_cpkm", is_op2_base=True)
+        compare_mix = compute_hierarchical_mix(actual_slice)
+
+        # Compute normalised distance
+        norm_dist = compute_normalised_distance(base_mix, compare_mix)
+
+        # Compute cell-level CPKMs
+        base_cpkm_cells = compute_op2_cell_cpkm(op2_slice)
+        compare_cpkm_cells = compute_cell_cpkm(actual_slice)
+
+        # Compute seven metrics
+        seven = compute_seven_metrics(
+            base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
+        )
+
+        # Total compare distance
+        compare_dist = actual_slice["distance_for_cpkm"].sum()
+
+        # Determine aggregation level
+        agg_level = "country" if country != "EU" else "eu"
+        bridge_level = "total" if is_total else "business"
+
+        mix_results = compute_mix_impacts(
+            seven, compare_dist,
+            bridge_level=bridge_level,
+            aggregation_level=agg_level,
+        )
+
+        # Write mix columns back to bridge for matching rows
+        mask = (
+            (bridge["report_year"] == year)
+            & (bridge[time_col] == period)
+            & (bridge["orig_country"] == country)
+        )
+
+        for mix_col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:
+            if mix_results.get(mix_col) is not None:
+                bridge.loc[mask, mix_col] = mix_results[mix_col]
 
 
 def create_op2_weekly_country_business_bridge(
@@ -265,23 +407,19 @@ def create_op2_weekly_country_business_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge["op2_normalized_cpkm"]
 
-    # Get SET impact from YoY bridge - only select required columns to avoid conflicts
-    yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
-    # Explicitly filter to only required columns to prevent column conflicts
-    set_impact_cols = ["report_year", "report_week", "orig_country", "business", "set_impact"]
-    yoy_set_impact = yoy_set_impact[[c for c in set_impact_cols if c in yoy_set_impact.columns]].copy()
-
-    # Ensure dtypes match for merge
-    for col in ["report_year", "report_week", "orig_country", "business"]:
-        bridge[col] = bridge[col].astype(str)
-        if col in yoy_set_impact.columns:
-            yoy_set_impact[col] = yoy_set_impact[col].astype(str)
-
-    bridge = bridge.merge(
-        yoy_set_impact,
-        on=["report_year", "report_week", "orig_country", "business"],
-        how="left",
-    )
+    # GET SET impact from YoY bridge - commented out, replaced by equipment_type_mix
+    # yoy_set_impact = get_set_impact_for_op2(final_bridge_df)
+    # set_impact_cols = ["report_year", "report_week", "orig_country", "business", "set_impact"]
+    # yoy_set_impact = yoy_set_impact[[c for c in set_impact_cols if c in yoy_set_impact.columns]].copy()
+    # for col in ["report_year", "report_week", "orig_country", "business"]:
+    #     bridge[col] = bridge[col].astype(str)
+    #     if col in yoy_set_impact.columns:
+    #         yoy_set_impact[col] = yoy_set_impact[col].astype(str)
+    # bridge = bridge.merge(
+    #     yoy_set_impact,
+    #     on=["report_year", "report_week", "orig_country", "business"],
+    #     how="left",
+    # )
 
     # Calculate variance metrics using np.where to handle missing values
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -340,5 +478,12 @@ def create_op2_weekly_country_business_bridge(
     )
 
     bridge["carrier_and_demand_impact"] = bridge["carrier_impact"] + bridge["demand_impact"]
+
+    # Initialize hierarchical mix columns
+    for col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:
+        bridge[col] = None
+
+    # Compute hierarchical mix decomposition per (year, week, country)
+    _compute_op2_mix_decomposition(df, df_op2, bridge, time_col="report_week", bridge_type_filter="weekly")
 
     return bridge

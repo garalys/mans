@@ -54,7 +54,7 @@ def adjust_op2_carrier_demand_impacts(bridge_df: pd.DataFrame) -> pd.DataFrame:
             + (row["demand_impact"] or 0)
             + (row["premium_impact"] or 0)
             + (row["market_rate_impact"] or 0)
-            + (row["set_impact"] or 0)
+            # + (row["set_impact"] or 0)  # Commented out - replaced by equipment_type_mix
             + (row["tech_impact"] or 0)
         ),
         axis=1,
@@ -96,7 +96,7 @@ def adjust_op2_carrier_demand_impacts(bridge_df: pd.DataFrame) -> pd.DataFrame:
         "carrier_and_demand_impact",
         "premium_impact",
         "market_rate_impact",
-        "set_impact",
+        # "set_impact",  # Commented out - replaced by equipment_type_mix
         "tech_impact",
     ]
 

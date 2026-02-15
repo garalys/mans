@@ -133,7 +133,8 @@ def create_op2_quarterly_bridge(
             norm_distance=("actual_distance_km", "sum"),
             op2_tech_impact_value=("tech_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum()),
             op2_market_impact=("market_rate_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum()),
-            set_impact_sum=("set_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum() if x.notna().any() else 0),
+            # Commented out - replaced by equipment_type_mix
+            # set_impact_sum=("set_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum() if x.notna().any() else 0),
         )
         quarterly_norm["op2_normalized_cpkm"] = quarterly_norm["op2_normalized_cost"] / quarterly_norm["norm_distance"]
     else:
@@ -149,7 +150,7 @@ def create_op2_quarterly_bridge(
     if not quarterly_norm.empty:
         bridge = bridge.merge(
             quarterly_norm[["report_year", "report_quarter", "orig_country", "op2_normalized_cpkm",
-                           "op2_tech_impact_value", "op2_market_impact", "set_impact_sum", "norm_distance"]],
+                           "op2_tech_impact_value", "op2_market_impact", "norm_distance"]],
             on=["report_year", "report_quarter", "orig_country"],
             how="left",
         )
@@ -160,15 +161,16 @@ def create_op2_quarterly_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge.get("op2_normalized_cpkm", bridge["op2_base_cpkm"])
 
-    # Get SET impact (aggregated from monthly)
-    if "set_impact_sum" in bridge.columns and "norm_distance" in bridge.columns:
-        bridge["set_impact"] = np.where(
-            bridge["norm_distance"] > 0,
-            bridge["set_impact_sum"] / bridge["norm_distance"],
-            0,
-        )
-    else:
-        bridge["set_impact"] = None
+    # Commented out - replaced by equipment_type_mix
+    # # Get SET impact (aggregated from monthly)
+    # if "set_impact_sum" in bridge.columns and "norm_distance" in bridge.columns:
+    #     bridge["set_impact"] = np.where(
+    #         bridge["norm_distance"] > 0,
+    #         bridge["set_impact_sum"] / bridge["norm_distance"],
+    #         0,
+    #     )
+    # else:
+    #     bridge["set_impact"] = None
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -253,8 +255,73 @@ def create_op2_quarterly_bridge(
     for col in ["premium_impact", "supply_rates", "report_week", "report_month"]:
         bridge[col] = None
 
+    # Aggregate mix columns from monthly OP2 bridges (distance-weighted)
+    _aggregate_quarterly_mix_from_monthly(bridge, monthly_op2)
+
     logger.info(f"Created {len(bridge)} OP2 country-total quarterly bridge rows")
     return bridge
+
+
+def _aggregate_quarterly_mix_from_monthly(
+    bridge: pd.DataFrame,
+    monthly_op2: pd.DataFrame,
+) -> None:
+    """
+    Aggregate hierarchical mix columns from monthly OP2 bridges to quarterly (in-place).
+
+    Each mix column is distance-weighted: sum(mix * distance) / sum(distance).
+    """
+    mix_cols = ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]
+
+    # Initialize columns
+    for col in mix_cols:
+        bridge[col] = None
+
+    if monthly_op2.empty:
+        return
+
+    # Check if monthly data has mix columns
+    available_mix = [c for c in mix_cols if c in monthly_op2.columns]
+    if not available_mix:
+        return
+
+    monthly_op2 = monthly_op2.copy()
+    monthly_op2["report_quarter"] = monthly_op2["report_month"].apply(_get_quarter_from_month)
+
+    # Determine groupby columns based on whether business is in monthly data
+    has_business = "business" in monthly_op2.columns and "business" in bridge.columns
+    group_cols = ["report_year", "report_quarter", "orig_country"]
+    if has_business and bridge["business"].iloc[0] != "Total":
+        group_cols.append("business")
+
+    for mix_col in available_mix:
+        if mix_col not in monthly_op2.columns:
+            continue
+
+        # Distance-weighted aggregation
+        monthly_op2[f"{mix_col}_weighted"] = (
+            monthly_op2[mix_col].fillna(0) * monthly_op2["actual_distance_km"].fillna(0)
+        )
+
+        agg = monthly_op2.groupby(group_cols, as_index=False).agg(
+            weighted_sum=(f"{mix_col}_weighted", "sum"),
+            total_dist=("actual_distance_km", "sum"),
+        )
+        agg[mix_col] = np.where(
+            agg["total_dist"] > 0,
+            agg["weighted_sum"] / agg["total_dist"],
+            0,
+        )
+
+        bridge_merged = bridge.merge(
+            agg[group_cols + [mix_col]],
+            on=group_cols,
+            how="left",
+            suffixes=("_old", ""),
+        )
+        bridge[mix_col] = bridge_merged[mix_col].values
+
+        monthly_op2.drop(columns=[f"{mix_col}_weighted"], inplace=True)
 
 
 def create_op2_quarterly_country_business_bridge(
@@ -353,7 +420,8 @@ def create_op2_quarterly_country_business_bridge(
             norm_distance=("actual_distance_km", "sum"),
             op2_tech_impact_value=("tech_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum()),
             op2_market_impact=("market_rate_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum()),
-            set_impact_sum=("set_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum() if x.notna().any() else 0),
+            # Commented out - replaced by equipment_type_mix
+            # set_impact_sum=("set_impact", lambda x: (x * monthly_op2.loc[x.index, "actual_distance_km"]).sum() if x.notna().any() else 0),
         )
         quarterly_metrics["op2_normalized_cpkm"] = quarterly_metrics["op2_normalized_cost"] / quarterly_metrics["norm_distance"]
     else:
@@ -370,7 +438,7 @@ def create_op2_quarterly_country_business_bridge(
         bridge = bridge.merge(
             quarterly_metrics[["report_year", "report_quarter", "orig_country", "business",
                               "op2_normalized_cpkm", "op2_tech_impact_value", "op2_market_impact",
-                              "set_impact_sum", "norm_distance"]],
+                              "norm_distance"]],
             on=["report_year", "report_quarter", "orig_country", "business"],
             how="left",
         )
@@ -380,15 +448,16 @@ def create_op2_quarterly_country_business_bridge(
     bridge["base_cpkm"] = bridge["op2_base_cpkm"]
     bridge["normalised_cpkm"] = bridge.get("op2_normalized_cpkm", bridge["op2_base_cpkm"])
 
-    # SET impact
-    if "set_impact_sum" in bridge.columns and "norm_distance" in bridge.columns:
-        bridge["set_impact"] = np.where(
-            bridge["norm_distance"] > 0,
-            bridge["set_impact_sum"] / bridge["norm_distance"],
-            0,
-        )
-    else:
-        bridge["set_impact"] = None
+    # Commented out - replaced by equipment_type_mix
+    # # SET impact
+    # if "set_impact_sum" in bridge.columns and "norm_distance" in bridge.columns:
+    #     bridge["set_impact"] = np.where(
+    #         bridge["norm_distance"] > 0,
+    #         bridge["set_impact_sum"] / bridge["norm_distance"],
+    #         0,
+    #     )
+    # else:
+    #     bridge["set_impact"] = None
 
     # Calculate variance metrics
     bridge["loads_variance"] = bridge["actual_loads"] - bridge["op2_base_loads"]
@@ -472,6 +541,9 @@ def create_op2_quarterly_country_business_bridge(
     # Null out non-applicable fields
     for col in ["premium_impact", "supply_rates", "report_week", "report_month"]:
         bridge[col] = None
+
+    # Aggregate mix columns from monthly OP2 bridges (distance-weighted)
+    _aggregate_quarterly_mix_from_monthly(bridge, monthly_op2)
 
     logger.info(f"Created {len(bridge)} OP2 country x business quarterly bridge rows")
     return bridge

@@ -65,7 +65,7 @@ def adjust_carrier_demand_impacts(bridge_df: pd.DataFrame) -> pd.DataFrame:
             + (row["demand_impact"] if pd.notnull(row["demand_impact"]) else 0)
             + (row["premium_impact"] if pd.notnull(row["premium_impact"]) else 0)
             + (row["market_rate_impact"] if pd.notnull(row["market_rate_impact"]) else 0)
-            + (row["set_impact"] if pd.notnull(row["set_impact"]) else 0)
+            # + (row["set_impact"] if pd.notnull(row["set_impact"]) else 0)  # Commented out - replaced by equipment_type_mix
             + (row["tech_impact"] if pd.notnull(row["tech_impact"]) else 0)
         )
         if pd.notnull(row["normalised_cpkm"])
@@ -113,7 +113,7 @@ def adjust_carrier_demand_impacts(bridge_df: pd.DataFrame) -> pd.DataFrame:
                 "carrier_and_demand_impact",
                 "premium_impact",
                 "market_rate_impact",
-                "set_impact",
+                # "set_impact",  # Commented out - replaced by equipment_type_mix
                 "tech_impact",
             ]
 

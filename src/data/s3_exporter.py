@@ -32,12 +32,16 @@ def export_to_quicksight(
         | base_cpkm                 | float  | Base period cost per kilometer           |
         | compare_cpkm              | float  | Comparison period cost per kilometer     |
         | mix_impact                | float  | Impact from mix changes ($/km)           |
+        | country_mix               | float  | Country mix impact ($/km) - EU only      |
+        | corridor_mix              | float  | Corridor mix impact ($/km)               |
+        | distance_band_mix         | float  | Distance band mix impact ($/km)          |
+        | business_flow_mix         | float  | Business flow mix impact ($/km)          |
+        | equipment_type_mix        | float  | Equipment type mix impact ($/km)         |
         | normalised_cpkm           | float  | Normalized cost per kilometer            |
         | carrier_impact            | float  | Impact from carrier changes ($/km)       |
         | demand_impact             | float  | Impact from demand changes ($/km)        |
         | carrier_and_demand_impact | float  | Combined carrier + demand impact ($/km)  |
         | market_rate_impact        | float  | Impact from market rate changes ($/km)   |
-        | set_impact                | float  | Impact from SET pricing ($/km)           |
         | tech_impact               | float  | Impact from tech initiatives ($/km)      |
         | premium_impact            | float  | Impact from premium pricing ($/km)       |
         | *_impact_mm               | float  | Impacts in millions USD                  |

@@ -109,6 +109,7 @@ def calculate_wow_bridge_metrics(
                     extract_year_from_report_year(year),
                     df_carrier,
                     report_week=w2,
+                    bridge_type="WoW",
                 )
 
                 # Update WoW-specific columns
@@ -151,6 +152,11 @@ def _update_wow_metrics(
         "base_cpkm",
         "mix_impact",
         "normalised_cpkm",
+        "country_mix",
+        "corridor_mix",
+        "distance_band_mix",
+        "business_flow_mix",
+        "equipment_type_mix",
         "supply_rates",
         "carrier_and_demand_impact",
         "carrier_impact",
@@ -158,7 +164,6 @@ def _update_wow_metrics(
         "premium_impact",
         "market_rate_impact",
         "tech_impact",
-        "set_impact",
         "compare_cpkm",
     ]
 

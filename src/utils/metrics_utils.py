@@ -23,12 +23,16 @@ def create_base_metrics_dict() -> Dict[str, Any]:
             - premium_impact: Impact from premium pricing
             - market_rate_impact: Impact from market rate changes
             - tech_impact: Impact from technology initiatives
-            - set_impact: Impact from SET pricing changes
             - compare_cpkm: Comparison period cost per kilometer
     """
     return {
         "base_cpkm": None,
         "mix_impact": None,
+        "country_mix": None,
+        "corridor_mix": None,
+        "distance_band_mix": None,
+        "business_flow_mix": None,
+        "equipment_type_mix": None,
         "normalised_cpkm": None,
         "supply_rates": None,
         "carrier_and_demand_impact": None,
@@ -37,7 +41,7 @@ def create_base_metrics_dict() -> Dict[str, Any]:
         "premium_impact": None,
         "market_rate_impact": None,
         "tech_impact": None,
-        "set_impact": None,
+        # "set_impact": None,  # Commented out - replaced by equipment_type_mix
         "compare_cpkm": None,
     }
 
