@@ -272,13 +272,13 @@ def compute_seven_metrics(
         if col not in GRAIN_COLS:
             work[col] = work[col].fillna(0)
 
-    # Compare cost at cell level
-    work["compare_cost_cell"] = work["compare_distance"] * work["compare_cpkm_cell"]
+    # Total compare distance for mix cost formulas
+    compare_total_distance = work["compare_distance"].sum()
 
     # 1. Base spend: adjusted_distance * base_cpkm
     work["base_spend_cell"] = work["normalised_distance"] * work["base_cpkm_cell"]
 
-    # 2. Rate cost: product(all 5 base mix) * compare_cost
+    # 2. Rate cost: product(all 5 base mix) * compare_cpkm * total_distance
     work["base_mix_product"] = (
         work["base_country_mix_pct"]
         * work["base_corridor_mix_pct"]
@@ -286,49 +286,53 @@ def compute_seven_metrics(
         * work["base_business_mix_pct"]
         * work["base_equipment_type_mix_pct"]
     )
-    work["rate_cost_cell"] = work["base_mix_product"] * work["compare_cost_cell"]
+    work["rate_cost_cell"] = work["base_mix_product"] * work["compare_cpkm_cell"] * compare_total_distance
 
-    # 3. Country cost: base(corridor,band,business,equip) * compare(country) * compare_cost
+    # 3. Country cost: base(corridor,band,business,equip) * compare(country) * compare_cpkm * total_distance
     work["country_cost_cell"] = (
         work["base_corridor_mix_pct"]
         * work["base_distance_band_mix_pct"]
         * work["base_business_mix_pct"]
         * work["base_equipment_type_mix_pct"]
         * work["compare_country_mix_pct"]
-        * work["compare_cost_cell"]
+        * work["compare_cpkm_cell"]
+        * compare_total_distance
     )
 
-    # 4. Corridor cost: base(band,business,equip) * compare(country,corridor) * compare_cost
+    # 4. Corridor cost: base(band,business,equip) * compare(country,corridor) * compare_cpkm * total_distance
     work["corridor_cost_cell"] = (
         work["base_distance_band_mix_pct"]
         * work["base_business_mix_pct"]
         * work["base_equipment_type_mix_pct"]
         * work["compare_country_mix_pct"]
         * work["compare_corridor_mix_pct"]
-        * work["compare_cost_cell"]
+        * work["compare_cpkm_cell"]
+        * compare_total_distance
     )
 
-    # 5. Distance band cost: base(business,equip) * compare(country,corridor,band) * compare_cost
+    # 5. Distance band cost: base(business,equip) * compare(country,corridor,band) * compare_cpkm * total_distance
     work["distance_band_cost_cell"] = (
         work["base_business_mix_pct"]
         * work["base_equipment_type_mix_pct"]
         * work["compare_country_mix_pct"]
         * work["compare_corridor_mix_pct"]
         * work["compare_distance_band_mix_pct"]
-        * work["compare_cost_cell"]
+        * work["compare_cpkm_cell"]
+        * compare_total_distance
     )
 
-    # 6. Business flow cost: base(equip) * compare(country,corridor,band,business) * compare_cost
+    # 6. Business flow cost: base(equip) * compare(country,corridor,band,business) * compare_cpkm * total_distance
     work["business_flow_cost_cell"] = (
         work["base_equipment_type_mix_pct"]
         * work["compare_country_mix_pct"]
         * work["compare_corridor_mix_pct"]
         * work["compare_distance_band_mix_pct"]
         * work["compare_business_mix_pct"]
-        * work["compare_cost_cell"]
+        * work["compare_cpkm_cell"]
+        * compare_total_distance
     )
 
-    # 7. Equipment type cost: product(all 5 compare mix) * compare_cost
+    # 7. Equipment type cost: product(all 5 compare mix) * compare_cpkm * total_distance
     work["compare_mix_product"] = (
         work["compare_country_mix_pct"]
         * work["compare_corridor_mix_pct"]
@@ -336,7 +340,7 @@ def compute_seven_metrics(
         * work["compare_business_mix_pct"]
         * work["compare_equipment_type_mix_pct"]
     )
-    work["equipment_type_cost_cell"] = work["compare_mix_product"] * work["compare_cost_cell"]
+    work["equipment_type_cost_cell"] = work["compare_mix_product"] * work["compare_cpkm_cell"] * compare_total_distance
 
     # Sum over all cells
     metrics = {
