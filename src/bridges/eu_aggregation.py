@@ -299,23 +299,26 @@ def _calculate_eu_impacts(
     impact_updates = {}
 
     # Hierarchical Mix Impact (EU level)
+    # Use full data (all countries, all businesses) for mix computation
     business_data = {
         "base": base_data[base_data["business"] == business],
         "compare": compare_data[compare_data["business"] == business],
     }
 
-    base_mix = compute_hierarchical_mix(business_data["base"])
-    compare_mix = compute_hierarchical_mix(business_data["compare"])
+    mix_compare_dist = compare_data["distance_for_cpkm"].sum()
+
+    base_mix = compute_hierarchical_mix(base_data)
+    compare_mix = compute_hierarchical_mix(compare_data)
     norm_dist = compute_normalised_distance(base_mix, compare_mix)
-    base_cpkm_cells = compute_cell_cpkm(business_data["base"])
-    compare_cpkm_cells = compute_cell_cpkm(business_data["compare"])
+    base_cpkm_cells = compute_cell_cpkm(base_data)
+    compare_cpkm_cells = compute_cell_cpkm(compare_data)
 
     seven = compute_seven_metrics(
         base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
     )
 
     mix_results = compute_mix_impacts(
-        seven, metrics["distance_km"],
+        seven, mix_compare_dist,
         bridge_level="business",  # EU business-level
         aggregation_level="eu",
     )
@@ -325,9 +328,16 @@ def _calculate_eu_impacts(
         business_data["base"], business_data["compare"], "EU"
     )
 
+    # normalised_cpkm = this bridge's base_cpkm + network-wide mix_impact
+    normalised_cpkm = (
+        metrics["base_cpkm"] + mix_results["mix_impact"]
+        if metrics["base_cpkm"] is not None and mix_results["mix_impact"] is not None
+        else None
+    )
+
     impact_updates.update({
         "mix_impact": mix_results["mix_impact"],
-        "normalised_cpkm": mix_results["normalised_cpkm"],
+        "normalised_cpkm": normalised_cpkm,
         "country_mix": mix_results["country_mix"],
         "corridor_mix": mix_results["corridor_mix"],
         "distance_band_mix": mix_results["distance_band_mix"],

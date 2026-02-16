@@ -66,6 +66,9 @@ def calculate_wow_bridge_metrics(
 
     # Pre-calculate all required data for efficiency
     wow_data = {}
+    # Cache full (all countries, all businesses) week data for mix computation
+    full_week_cache = {}
+
     for year in years:
         year_data = df[df["report_year"] == year]
         wow_data[year] = year_data.groupby(
@@ -81,6 +84,11 @@ def calculate_wow_bridge_metrics(
                 ),
             }
         ).to_dict()
+
+        # Cache full week data (all countries, all businesses) per week
+        full_week_cache[year] = {}
+        for week in year_data["report_week"].unique():
+            full_week_cache[year][week] = year_data[year_data["report_week"] == week]
 
     # Process WoW rows in batches
     batch_size = 1000
@@ -101,6 +109,10 @@ def calculate_wow_bridge_metrics(
                 base_data = wow_data[year][key]["data"]
                 compare_data = wow_data[year][compare_key]["data"]
 
+                # Get full week data for mix computation
+                full_base = full_week_cache[year].get(w1)
+                full_compare = full_week_cache[year].get(w2)
+
                 metrics = calculate_detailed_bridge_metrics(
                     base_data,
                     compare_data,
@@ -110,6 +122,8 @@ def calculate_wow_bridge_metrics(
                     df_carrier,
                     report_week=w2,
                     bridge_type="WoW",
+                    full_base_data=full_base,
+                    full_compare_data=full_compare,
                 )
 
                 # Update WoW-specific columns

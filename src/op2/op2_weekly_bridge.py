@@ -258,30 +258,27 @@ def _compute_op2_mix_decomposition(
     # Determine if bridge is at total or business level
     is_total = "Total" in bridge["business"].values
 
-    # Iterate over each unique (year, time_period, country) in bridge
-    for _, grp in bridge.groupby(["report_year", time_col, "orig_country"]):
+    # Iterate over each unique (year, time_period) — compute mixes from ALL countries
+    for _, grp in bridge.groupby(["report_year", time_col]):
         year = grp["report_year"].iloc[0]
         period = grp[time_col].iloc[0]
-        country = grp["orig_country"].iloc[0]
 
-        # Get OP2 data for this period/country (base)
+        # Get OP2 data for this period — ALL countries (full network)
         op2_slice = op2[
             (op2["report_year"] == year)
             & (op2[op2_time_col] == period)
-            & (op2["orig_country"] == country)
         ]
 
-        # Get actual data for this period/country (compare)
+        # Get actual data for this period — ALL countries (full network)
         actual_slice = actual_df[
             (actual_df["report_year"] == year)
             & (actual_df[time_col] == period)
-            & (actual_df["orig_country"] == country)
         ]
 
         if op2_slice.empty or actual_slice.empty:
             continue
 
-        # Compute hierarchical mixes
+        # Compute hierarchical mixes from full network data
         base_mix = compute_hierarchical_mix(op2_slice, distance_col="distance_for_cpkm", is_op2_base=True)
         compare_mix = compute_hierarchical_mix(actual_slice)
 
@@ -297,24 +294,22 @@ def _compute_op2_mix_decomposition(
             base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
         )
 
-        # Total compare distance
+        # Total compare distance (full network)
         compare_dist = actual_slice["distance_for_cpkm"].sum()
 
-        # Determine aggregation level
-        agg_level = "country" if country != "EU" else "eu"
+        # Use EU-level aggregation since we have all countries
         bridge_level = "total" if is_total else "business"
 
         mix_results = compute_mix_impacts(
             seven, compare_dist,
             bridge_level=bridge_level,
-            aggregation_level=agg_level,
+            aggregation_level="eu",
         )
 
-        # Write mix columns back to bridge for matching rows
+        # Write mix columns to ALL rows matching this time period (all countries)
         mask = (
             (bridge["report_year"] == year)
             & (bridge[time_col] == period)
-            & (bridge["orig_country"] == country)
         )
 
         for mix_col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:

@@ -162,6 +162,10 @@ def calculate_total_aggregated_metrics(
                     time_period = month
                     compare_year_num = extract_year_from_report_year(compare_year)
 
+                # Keep full (all countries) data for mix computation
+                full_base_data = base_data
+                full_compare_data = compare_data
+
                 # Apply country filter if not EU
                 if country != "EU":
                     base_data = base_data[base_data["orig_country"] == country]
@@ -174,7 +178,7 @@ def calculate_total_aggregated_metrics(
                 # Calculate total metrics
                 metrics = _calculate_total_metrics(base_data, compare_data, country, time_period)
 
-                # Update bridge DataFrame
+                # Update bridge DataFrame — pass full data for mix computation
                 _update_bridge_with_total_metrics(
                     bridge_df,
                     metrics,
@@ -185,6 +189,8 @@ def calculate_total_aggregated_metrics(
                     time_period,
                     compare_year_num,
                     df_carrier,
+                    full_base_data=full_base_data,
+                    full_compare_data=full_compare_data,
                 )
 
 
@@ -270,6 +276,8 @@ def _update_bridge_with_total_metrics(
     time_period: str,
     compare_year: int,
     df_carrier: pd.DataFrame,
+    full_base_data: pd.DataFrame = None,
+    full_compare_data: pd.DataFrame = None,
 ) -> None:
     """Update bridge DataFrame with total aggregated metrics."""
     # Determine prefix mapping
@@ -310,14 +318,16 @@ def _update_bridge_with_total_metrics(
         country = bridge_df.loc[idx, "orig_country"]
 
         # Hierarchical Mix Impact (total level = across all businesses)
-        base_filtered = base_data if country == "EU" else base_data[base_data["orig_country"] == country]
-        compare_filtered = compare_data if country == "EU" else compare_data[compare_data["orig_country"] == country]
+        # Use full (all countries, all businesses) data for mix computation
+        mix_base = full_base_data if full_base_data is not None else base_data
+        mix_compare = full_compare_data if full_compare_data is not None else compare_data
+        mix_compare_dist = mix_compare["distance_for_cpkm"].sum()
 
-        base_mix = compute_hierarchical_mix(base_filtered)
-        compare_mix = compute_hierarchical_mix(compare_filtered)
+        base_mix = compute_hierarchical_mix(mix_base)
+        compare_mix = compute_hierarchical_mix(mix_compare)
         norm_dist = compute_normalised_distance(base_mix, compare_mix)
-        base_cpkm_cells = compute_cell_cpkm(base_filtered)
-        compare_cpkm_cells = compute_cell_cpkm(compare_filtered)
+        base_cpkm_cells = compute_cell_cpkm(mix_base)
+        compare_cpkm_cells = compute_cell_cpkm(mix_compare)
 
         seven = compute_seven_metrics(
             base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
@@ -325,13 +335,18 @@ def _update_bridge_with_total_metrics(
 
         agg_level = "country" if country != "EU" else "eu"
         mix_results = compute_mix_impacts(
-            seven, metrics["distance_km"],
+            seven, mix_compare_dist,
             bridge_level="total",
             aggregation_level=agg_level,
         )
 
         bridge_df.loc[idx, "mix_impact"] = mix_results["mix_impact"]
-        bridge_df.loc[idx, "normalised_cpkm"] = mix_results["normalised_cpkm"]
+        # normalised_cpkm = this bridge's base_cpkm + network-wide mix_impact
+        bridge_df.loc[idx, "normalised_cpkm"] = (
+            metrics["base_cpkm"] + mix_results["mix_impact"]
+            if metrics["base_cpkm"] is not None and mix_results["mix_impact"] is not None
+            else None
+        )
         bridge_df.loc[idx, "country_mix"] = mix_results["country_mix"]
         bridge_df.loc[idx, "corridor_mix"] = mix_results["corridor_mix"]
         bridge_df.loc[idx, "distance_band_mix"] = mix_results["distance_band_mix"]
