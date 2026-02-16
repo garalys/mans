@@ -503,3 +503,45 @@ def compute_op2_cell_cpkm(
     )
 
     return grouped[GRAIN_COLS + ["cpkm"]]
+
+
+def enrich_mix_pcts(
+    filtered_grain: pd.DataFrame,
+    full_grain: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Override mix percentage columns on a filtered grain with values from a full-data grain.
+
+    The filtered grain keeps its own distances (from filtered data), but gets
+    the mix percentages from the full-data grain (computed from the full network).
+    This ensures mix percentages reflect the entire network while distances/costs
+    remain bridge-specific.
+
+    Args:
+        filtered_grain: Grain DataFrame from filtered (per-country/business) data.
+                        Has GRAIN_COLS + distance + 5 mix_pct columns.
+        full_grain: Grain DataFrame from full (all countries/businesses) data.
+                    Has GRAIN_COLS + distance + 5 mix_pct columns.
+
+    Returns:
+        DataFrame with filtered_grain's structure (same cells and distances)
+        but mix_pct columns replaced with full_grain's values.
+        Cells in filtered_grain not found in full_grain get mix_pct = 0.
+    """
+    mix_pct_cols = [
+        "country_mix_pct", "corridor_mix_pct", "distance_band_mix_pct",
+        "business_mix_pct", "equipment_type_mix_pct",
+    ]
+
+    # Drop existing mix_pct columns from filtered grain
+    result = filtered_grain.drop(columns=mix_pct_cols, errors="ignore")
+
+    # Merge full grain's mix_pct columns (by GRAIN_COLS)
+    full_pcts = full_grain[GRAIN_COLS + mix_pct_cols].copy()
+    result = result.merge(full_pcts, on=GRAIN_COLS, how="left")
+
+    # Fill NaN (cells in filtered but not in full) with 0
+    for col in mix_pct_cols:
+        result[col] = result[col].fillna(0)
+
+    return result

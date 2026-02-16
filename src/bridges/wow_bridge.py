@@ -8,6 +8,7 @@ import pandas as pd
 
 from ..utils.date_utils import extract_year_from_report_year
 from ..calculators.carrier_calculator import calculate_active_carriers
+from ..calculators.mix_calculator import compute_hierarchical_mix
 from .bridge_metrics import calculate_detailed_bridge_metrics
 
 
@@ -66,8 +67,8 @@ def calculate_wow_bridge_metrics(
 
     # Pre-calculate all required data for efficiency
     wow_data = {}
-    # Cache full (all countries, all businesses) week data for mix computation
-    full_week_cache = {}
+    # Pre-compute full-data mix grains per (year, week)
+    full_mix_cache = {}
 
     for year in years:
         year_data = df[df["report_year"] == year]
@@ -85,10 +86,11 @@ def calculate_wow_bridge_metrics(
             }
         ).to_dict()
 
-        # Cache full week data (all countries, all businesses) per week
-        full_week_cache[year] = {}
+        # Pre-compute full-data mix grains per week (all countries, all businesses)
+        full_mix_cache[year] = {}
         for week in year_data["report_week"].unique():
-            full_week_cache[year][week] = year_data[year_data["report_week"] == week]
+            week_data = year_data[year_data["report_week"] == week]
+            full_mix_cache[year][week] = compute_hierarchical_mix(week_data)
 
     # Process WoW rows in batches
     batch_size = 1000
@@ -109,9 +111,9 @@ def calculate_wow_bridge_metrics(
                 base_data = wow_data[year][key]["data"]
                 compare_data = wow_data[year][compare_key]["data"]
 
-                # Get full week data for mix computation
-                full_base = full_week_cache[year].get(w1)
-                full_compare = full_week_cache[year].get(w2)
+                # Get pre-computed full-data mix grains
+                full_base_mix = full_mix_cache[year].get(w1)
+                full_compare_mix = full_mix_cache[year].get(w2)
 
                 metrics = calculate_detailed_bridge_metrics(
                     base_data,
@@ -122,8 +124,8 @@ def calculate_wow_bridge_metrics(
                     df_carrier,
                     report_week=w2,
                     bridge_type="WoW",
-                    full_base_data=full_base,
-                    full_compare_data=full_compare,
+                    full_base_mix=full_base_mix,
+                    full_compare_mix=full_compare_mix,
                 )
 
                 # Update WoW-specific columns

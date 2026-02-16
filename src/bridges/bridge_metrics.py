@@ -27,6 +27,7 @@ from ..calculators.mix_calculator import (
     compute_seven_metrics,
     compute_mix_impacts,
     compute_cell_cpkm,
+    enrich_mix_pcts,
 )
 # from ..calculators.set_impact_calculator import calculate_set_impact  # Commented out - replaced by equipment_type_mix
 
@@ -41,8 +42,8 @@ def calculate_detailed_bridge_metrics(
     report_week: Optional[str] = None,
     report_month: Optional[str] = None,
     bridge_type: str = "YoY",
-    full_base_data: Optional[pd.DataFrame] = None,
-    full_compare_data: Optional[pd.DataFrame] = None,
+    full_base_mix: Optional[pd.DataFrame] = None,
+    full_compare_mix: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     """
     Calculate detailed metrics for bridge visualization.
@@ -144,18 +145,25 @@ def calculate_detailed_bridge_metrics(
     # Calculate bridge components if we have valid data
     if base_dist > 0 and compare_dist > 0:
         # Hierarchical Mix Impact
-        # Use full (unfiltered) data for mix pipeline if provided,
-        # so mix percentages reflect the entire network, not just a single country/business slice.
-        mix_base = full_base_data if full_base_data is not None else base_data
-        mix_compare = full_compare_data if full_compare_data is not None else compare_data
-        mix_compare_dist = mix_compare["distance_for_cpkm"].sum()
+        # Compute grain from FILTERED data (bridge's own distances and CPKMs)
+        filtered_base_mix = compute_hierarchical_mix(base_data)
+        filtered_compare_mix = compute_hierarchical_mix(compare_data)
 
-        base_mix = compute_hierarchical_mix(mix_base)
-        compare_mix = compute_hierarchical_mix(mix_compare)
-        norm_dist = compute_normalised_distance(base_mix, compare_mix)
-        base_cpkm_cells = compute_cell_cpkm(mix_base)
-        compare_cpkm_cells = compute_cell_cpkm(mix_compare)
+        # Enrich with full-data percentages if provided (same pcts for all bridges in a period)
+        if full_base_mix is not None:
+            base_mix = enrich_mix_pcts(filtered_base_mix, full_base_mix)
+            compare_mix = enrich_mix_pcts(filtered_compare_mix, full_compare_mix)
+        else:
+            base_mix = filtered_base_mix
+            compare_mix = filtered_compare_mix
 
+        # Normalised distance from FILTERED grains (bridge's own distances)
+        norm_dist = compute_normalised_distance(filtered_base_mix, filtered_compare_mix)
+        # Cell CPKMs from FILTERED data
+        base_cpkm_cells = compute_cell_cpkm(base_data)
+        compare_cpkm_cells = compute_cell_cpkm(compare_data)
+
+        # Seven metrics: enriched mixes (full-data pcts) + filtered distances/CPKMs
         seven = compute_seven_metrics(
             base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
         )
@@ -163,20 +171,15 @@ def calculate_detailed_bridge_metrics(
         # Determine aggregation level based on country
         agg_level = "country" if country != "EU" else "eu"
 
+        # Mix impacts using FILTERED compare distance (bridge-specific)
         mix_results = compute_mix_impacts(
-            seven, mix_compare_dist,
+            seven, compare_dist,
             bridge_level="business",  # business-level bridges (called per-business)
             aggregation_level=agg_level,
         )
 
-        # Use mix impacts from full data, but base_cpkm from filtered data
         metrics["mix_impact"] = mix_results["mix_impact"]
-        # normalised_cpkm = this bridge's base_cpkm + network-wide mix_impact
-        metrics["normalised_cpkm"] = (
-            base_cpkm + mix_results["mix_impact"]
-            if base_cpkm is not None and mix_results["mix_impact"] is not None
-            else None
-        )
+        metrics["normalised_cpkm"] = mix_results["normalised_cpkm"]
         metrics["country_mix"] = mix_results["country_mix"]
         metrics["corridor_mix"] = mix_results["corridor_mix"]
         metrics["distance_band_mix"] = mix_results["distance_band_mix"]

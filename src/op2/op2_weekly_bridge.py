@@ -16,6 +16,7 @@ from ..calculators.mix_calculator import (
     compute_mix_impacts,
     compute_cell_cpkm,
     compute_op2_cell_cpkm,
+    enrich_mix_pcts,
 )
 from .op2_data_extractor import extract_op2_weekly_base_cpkm, extract_op2_weekly_base_by_business
 from .op2_normalizer import compute_op2_normalized_cpkm_weekly
@@ -258,58 +259,82 @@ def _compute_op2_mix_decomposition(
     # Determine if bridge is at total or business level
     is_total = "Total" in bridge["business"].values
 
-    # Iterate over each unique (year, time_period) — compute mixes from ALL countries
+    # Pre-compute full-data mix grains per (year, period) — all countries
+    full_mix_cache = {}
     for _, grp in bridge.groupby(["report_year", time_col]):
         year = grp["report_year"].iloc[0]
         period = grp[time_col].iloc[0]
 
-        # Get OP2 data for this period — ALL countries (full network)
+        full_op2 = op2[(op2["report_year"] == year) & (op2[op2_time_col] == period)]
+        full_actual = actual_df[(actual_df["report_year"] == year) & (actual_df[time_col] == period)]
+
+        if not full_op2.empty and not full_actual.empty:
+            full_mix_cache[(year, period)] = {
+                "base_mix": compute_hierarchical_mix(full_op2, distance_col="distance_for_cpkm", is_op2_base=True),
+                "compare_mix": compute_hierarchical_mix(full_actual),
+            }
+
+    # Iterate per (year, period, country) — compute per-country impacts with full-data pcts
+    for _, grp in bridge.groupby(["report_year", time_col, "orig_country"]):
+        year = grp["report_year"].iloc[0]
+        period = grp[time_col].iloc[0]
+        country = grp["orig_country"].iloc[0]
+
+        if (year, period) not in full_mix_cache:
+            continue
+
+        # Per-country slices
         op2_slice = op2[
             (op2["report_year"] == year)
             & (op2[op2_time_col] == period)
+            & (op2["orig_country"] == country)
         ]
 
-        # Get actual data for this period — ALL countries (full network)
         actual_slice = actual_df[
             (actual_df["report_year"] == year)
             & (actual_df[time_col] == period)
+            & (actual_df["orig_country"] == country)
         ]
 
         if op2_slice.empty or actual_slice.empty:
             continue
 
-        # Compute hierarchical mixes from full network data
-        base_mix = compute_hierarchical_mix(op2_slice, distance_col="distance_for_cpkm", is_op2_base=True)
-        compare_mix = compute_hierarchical_mix(actual_slice)
+        # Compute grain from FILTERED (per-country) data — bridge's own distances/CPKMs
+        filtered_base_mix = compute_hierarchical_mix(op2_slice, distance_col="distance_for_cpkm", is_op2_base=True)
+        filtered_compare_mix = compute_hierarchical_mix(actual_slice)
 
-        # Compute normalised distance
-        norm_dist = compute_normalised_distance(base_mix, compare_mix)
+        # Enrich with full-data percentages
+        base_mix = enrich_mix_pcts(filtered_base_mix, full_mix_cache[(year, period)]["base_mix"])
+        compare_mix = enrich_mix_pcts(filtered_compare_mix, full_mix_cache[(year, period)]["compare_mix"])
 
-        # Compute cell-level CPKMs
+        # Normalised distance + CPKMs from FILTERED data
+        norm_dist = compute_normalised_distance(filtered_base_mix, filtered_compare_mix)
         base_cpkm_cells = compute_op2_cell_cpkm(op2_slice)
         compare_cpkm_cells = compute_cell_cpkm(actual_slice)
 
-        # Compute seven metrics
+        # Compute seven metrics: enriched mixes + filtered distances/CPKMs
         seven = compute_seven_metrics(
             base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
         )
 
-        # Total compare distance (full network)
+        # Per-country compare distance
         compare_dist = actual_slice["distance_for_cpkm"].sum()
 
-        # Use EU-level aggregation since we have all countries
+        # Determine aggregation level
+        agg_level = "country" if country != "EU" else "eu"
         bridge_level = "total" if is_total else "business"
 
         mix_results = compute_mix_impacts(
             seven, compare_dist,
             bridge_level=bridge_level,
-            aggregation_level="eu",
+            aggregation_level=agg_level,
         )
 
-        # Write mix columns to ALL rows matching this time period (all countries)
+        # Write mix columns back to bridge for matching rows
         mask = (
             (bridge["report_year"] == year)
             & (bridge[time_col] == period)
+            & (bridge["orig_country"] == country)
         )
 
         for mix_col in ["country_mix", "corridor_mix", "distance_band_mix", "business_flow_mix", "equipment_type_mix"]:

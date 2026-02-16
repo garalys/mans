@@ -23,6 +23,7 @@ from ..calculators.mix_calculator import (
     compute_seven_metrics,
     compute_mix_impacts,
     compute_cell_cpkm,
+    enrich_mix_pcts,
 )
 # from ..calculators.set_impact_calculator import calculate_set_impact  # Commented out - replaced by equipment_type_mix
 
@@ -299,26 +300,35 @@ def _calculate_eu_impacts(
     impact_updates = {}
 
     # Hierarchical Mix Impact (EU level)
-    # Use full data (all countries, all businesses) for mix computation
+    # Filter to this business (for distances, CPKMs)
     business_data = {
         "base": base_data[base_data["business"] == business],
         "compare": compare_data[compare_data["business"] == business],
     }
 
-    mix_compare_dist = compare_data["distance_for_cpkm"].sum()
+    # Compute grain from FILTERED (business) data — bridge's own distances/CPKMs
+    filtered_base_mix = compute_hierarchical_mix(business_data["base"])
+    filtered_compare_mix = compute_hierarchical_mix(business_data["compare"])
 
-    base_mix = compute_hierarchical_mix(base_data)
-    compare_mix = compute_hierarchical_mix(compare_data)
-    norm_dist = compute_normalised_distance(base_mix, compare_mix)
-    base_cpkm_cells = compute_cell_cpkm(base_data)
-    compare_cpkm_cells = compute_cell_cpkm(compare_data)
+    # Compute full-data mix grains (all countries, all businesses) for percentages
+    full_base_mix = compute_hierarchical_mix(base_data)
+    full_compare_mix = compute_hierarchical_mix(compare_data)
+
+    # Enrich filtered grain with full-data percentages
+    base_mix = enrich_mix_pcts(filtered_base_mix, full_base_mix)
+    compare_mix = enrich_mix_pcts(filtered_compare_mix, full_compare_mix)
+
+    # Normalised distance + CPKMs from FILTERED data
+    norm_dist = compute_normalised_distance(filtered_base_mix, filtered_compare_mix)
+    base_cpkm_cells = compute_cell_cpkm(business_data["base"])
+    compare_cpkm_cells = compute_cell_cpkm(business_data["compare"])
 
     seven = compute_seven_metrics(
         base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
     )
 
     mix_results = compute_mix_impacts(
-        seven, mix_compare_dist,
+        seven, metrics["distance_km"],
         bridge_level="business",  # EU business-level
         aggregation_level="eu",
     )
@@ -328,16 +338,9 @@ def _calculate_eu_impacts(
         business_data["base"], business_data["compare"], "EU"
     )
 
-    # normalised_cpkm = this bridge's base_cpkm + network-wide mix_impact
-    normalised_cpkm = (
-        metrics["base_cpkm"] + mix_results["mix_impact"]
-        if metrics["base_cpkm"] is not None and mix_results["mix_impact"] is not None
-        else None
-    )
-
     impact_updates.update({
         "mix_impact": mix_results["mix_impact"],
-        "normalised_cpkm": normalised_cpkm,
+        "normalised_cpkm": mix_results["normalised_cpkm"],
         "country_mix": mix_results["country_mix"],
         "corridor_mix": mix_results["corridor_mix"],
         "distance_band_mix": mix_results["distance_band_mix"],

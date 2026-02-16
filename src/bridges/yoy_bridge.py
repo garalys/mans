@@ -7,6 +7,7 @@ Calculates bridge metrics comparing same weeks/months between consecutive years.
 import pandas as pd
 
 from ..utils.date_utils import extract_year_from_report_year
+from ..calculators.mix_calculator import compute_hierarchical_mix
 from .bridge_metrics import calculate_detailed_bridge_metrics
 
 
@@ -74,8 +75,8 @@ def calculate_yoy_bridge_metrics(
 
     bridging_value = f"{base_year}_to_{compare_year}"
 
-    # Cache full (all countries, all businesses) period data for mix computation
-    full_period_cache = {}
+    # Pre-compute full-data mix grains per week (all countries, all businesses)
+    full_mix_cache = {}
 
     # Process each matching row
     for idx, row in bridge_df[
@@ -86,17 +87,17 @@ def calculate_yoy_bridge_metrics(
         country = row["orig_country"]
         business = row["business"]
 
-        # Get or compute full period data (all countries, all businesses)
-        if week not in full_period_cache:
-            full_period_cache[week] = {
-                "base": df[
-                    (df["report_year"] == base_year)
-                    & (df["report_week"] == week)
-                ],
-                "compare": df[
-                    (df["report_year"] == compare_year)
-                    & (df["report_week"] == week)
-                ],
+        # Pre-compute full-data mix grains (once per week)
+        if week not in full_mix_cache:
+            full_base = df[
+                (df["report_year"] == base_year) & (df["report_week"] == week)
+            ]
+            full_compare = df[
+                (df["report_year"] == compare_year) & (df["report_week"] == week)
+            ]
+            full_mix_cache[week] = {
+                "base_mix": compute_hierarchical_mix(full_base) if not full_base.empty else None,
+                "compare_mix": compute_hierarchical_mix(full_compare) if not full_compare.empty else None,
             }
 
         # Filter data for base and compare periods (per country, per business)
@@ -114,7 +115,7 @@ def calculate_yoy_bridge_metrics(
             & (df["business"] == business)
         ]
 
-        # Calculate metrics — pass full data for mix, filtered data for everything else
+        # Calculate metrics — pass pre-computed full-data mix grains for percentages
         metrics = calculate_detailed_bridge_metrics(
             base_data,
             compare_data,
@@ -123,8 +124,8 @@ def calculate_yoy_bridge_metrics(
             compare_year_num,
             df_carrier,
             report_week=week,
-            full_base_data=full_period_cache[week]["base"],
-            full_compare_data=full_period_cache[week]["compare"],
+            full_base_mix=full_mix_cache[week]["base_mix"],
+            full_compare_mix=full_mix_cache[week]["compare_mix"],
         )
 
         # Update bridge_df with calculated metrics

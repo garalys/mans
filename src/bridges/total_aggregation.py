@@ -24,6 +24,7 @@ from ..calculators.mix_calculator import (
     compute_seven_metrics,
     compute_mix_impacts,
     compute_cell_cpkm,
+    enrich_mix_pcts,
 )
 # from ..calculators.set_impact_calculator import calculate_set_impact  # Commented out - replaced by equipment_type_mix
 
@@ -162,9 +163,14 @@ def calculate_total_aggregated_metrics(
                     time_period = month
                     compare_year_num = extract_year_from_report_year(compare_year)
 
-                # Keep full (all countries) data for mix computation
-                full_base_data = base_data
-                full_compare_data = compare_data
+                # Pre-compute full-data mix grains (all countries) before country filter
+                # Cache key to avoid recomputing for same time period
+                if not base_data.empty and not compare_data.empty:
+                    full_base_mix = compute_hierarchical_mix(base_data)
+                    full_compare_mix = compute_hierarchical_mix(compare_data)
+                else:
+                    full_base_mix = None
+                    full_compare_mix = None
 
                 # Apply country filter if not EU
                 if country != "EU":
@@ -178,7 +184,7 @@ def calculate_total_aggregated_metrics(
                 # Calculate total metrics
                 metrics = _calculate_total_metrics(base_data, compare_data, country, time_period)
 
-                # Update bridge DataFrame — pass full data for mix computation
+                # Update bridge DataFrame — pass full-data mix grains for percentages
                 _update_bridge_with_total_metrics(
                     bridge_df,
                     metrics,
@@ -189,8 +195,8 @@ def calculate_total_aggregated_metrics(
                     time_period,
                     compare_year_num,
                     df_carrier,
-                    full_base_data=full_base_data,
-                    full_compare_data=full_compare_data,
+                    full_base_mix=full_base_mix,
+                    full_compare_mix=full_compare_mix,
                 )
 
 
@@ -276,8 +282,8 @@ def _update_bridge_with_total_metrics(
     time_period: str,
     compare_year: int,
     df_carrier: pd.DataFrame,
-    full_base_data: pd.DataFrame = None,
-    full_compare_data: pd.DataFrame = None,
+    full_base_mix: pd.DataFrame = None,
+    full_compare_mix: pd.DataFrame = None,
 ) -> None:
     """Update bridge DataFrame with total aggregated metrics."""
     # Determine prefix mapping
@@ -318,16 +324,22 @@ def _update_bridge_with_total_metrics(
         country = bridge_df.loc[idx, "orig_country"]
 
         # Hierarchical Mix Impact (total level = across all businesses)
-        # Use full (all countries, all businesses) data for mix computation
-        mix_base = full_base_data if full_base_data is not None else base_data
-        mix_compare = full_compare_data if full_compare_data is not None else compare_data
-        mix_compare_dist = mix_compare["distance_for_cpkm"].sum()
+        # Compute grain from FILTERED data (bridge's own distances/CPKMs)
+        filtered_base_mix = compute_hierarchical_mix(base_data)
+        filtered_compare_mix = compute_hierarchical_mix(compare_data)
 
-        base_mix = compute_hierarchical_mix(mix_base)
-        compare_mix = compute_hierarchical_mix(mix_compare)
-        norm_dist = compute_normalised_distance(base_mix, compare_mix)
-        base_cpkm_cells = compute_cell_cpkm(mix_base)
-        compare_cpkm_cells = compute_cell_cpkm(mix_compare)
+        # Enrich with full-data percentages if provided
+        if full_base_mix is not None:
+            base_mix = enrich_mix_pcts(filtered_base_mix, full_base_mix)
+            compare_mix = enrich_mix_pcts(filtered_compare_mix, full_compare_mix)
+        else:
+            base_mix = filtered_base_mix
+            compare_mix = filtered_compare_mix
+
+        # Normalised distance from FILTERED grains (bridge's own distances)
+        norm_dist = compute_normalised_distance(filtered_base_mix, filtered_compare_mix)
+        base_cpkm_cells = compute_cell_cpkm(base_data)
+        compare_cpkm_cells = compute_cell_cpkm(compare_data)
 
         seven = compute_seven_metrics(
             base_mix, compare_mix, norm_dist, base_cpkm_cells, compare_cpkm_cells
@@ -335,18 +347,13 @@ def _update_bridge_with_total_metrics(
 
         agg_level = "country" if country != "EU" else "eu"
         mix_results = compute_mix_impacts(
-            seven, mix_compare_dist,
+            seven, metrics["distance_km"],
             bridge_level="total",
             aggregation_level=agg_level,
         )
 
         bridge_df.loc[idx, "mix_impact"] = mix_results["mix_impact"]
-        # normalised_cpkm = this bridge's base_cpkm + network-wide mix_impact
-        bridge_df.loc[idx, "normalised_cpkm"] = (
-            metrics["base_cpkm"] + mix_results["mix_impact"]
-            if metrics["base_cpkm"] is not None and mix_results["mix_impact"] is not None
-            else None
-        )
+        bridge_df.loc[idx, "normalised_cpkm"] = mix_results["normalised_cpkm"]
         bridge_df.loc[idx, "country_mix"] = mix_results["country_mix"]
         bridge_df.loc[idx, "corridor_mix"] = mix_results["corridor_mix"]
         bridge_df.loc[idx, "distance_band_mix"] = mix_results["distance_band_mix"]
